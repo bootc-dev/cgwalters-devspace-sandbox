@@ -1,0 +1,83 @@
+name: Tailscale development runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "How long to keep the runner available"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+        default: "30"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+# Each dispatch gets its own group. In particular, a new user's session must
+# not cancel an existing interactive session.
+concurrency:
+  group: devspace-${{ github.repository }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  devspace:
+    name: Ephemeral SSH devspace
+    runs-on: rhel10-x86_64-16c-64g
+    timeout-minutes: 125
+    steps:
+      - name: Install Tailscale networking prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y iptables
+          # RHEL's sudo secure_path excludes /usr/local/bin, where the action
+          # installs its downloaded binaries.
+          sudo ln -sfn /usr/local/bin/tailscale /usr/bin/tailscale
+          sudo ln -sfn /usr/local/bin/tailscaled /usr/bin/tailscaled
+
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:bootc-dev-sandbox
+          hostname: cgwalters-devspace-${{ github.run_id }}
+
+      - name: Install development prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y git procps-ng iproute iputils bind-utils jq tmux
+          id runner
+
+      - name: Enable Tailscale SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo tailscale set --ssh
+          printf 'Tailscale SSH is ready for runner@%s\n' "$(hostname --fqdn)"
+          printf 'Tailscale IPv4: %s\n' "$(sudo tailscale ip -4)"
+          sudo tailscale status --self
+
+      - name: Keep the devspace available
+        shell: bash
+        env:
+          DURATION_MINUTES: ${{ inputs.duration }}
+        run: |
+          set -euo pipefail
+          duration_seconds=$((DURATION_MINUTES * 60))
+          started=$(date +%s)
+          trap 'printf "Shutdown requested; exiting cleanly.\n"; exit 0' INT TERM
+          printf 'This devspace will stop after %s minutes or when the job is cancelled.\n' "$DURATION_MINUTES"
+          while :; do
+            elapsed=$(( $(date +%s) - started ))
+            (( elapsed >= duration_seconds )) && break
+            printf '[%s] Tailscale status:\n' "$(date --iso-8601=seconds)"
+            sudo tailscale status --self
+            sleep 60
+          done
+          printf 'The requested devspace duration has elapsed.\n'
