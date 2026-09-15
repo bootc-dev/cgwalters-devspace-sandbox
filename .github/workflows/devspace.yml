@@ -1,0 +1,148 @@
+name: Development runner
+run-name: "Devspace ${{ inputs.session_name || github.run_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_public_key:
+        description: "Single-line Ed25519 public key for OpenSSH"
+        type: string
+        required: true
+      session_name:
+        description: "Safe session name used to correlate a run"
+        type: string
+        default: ""
+        required: false
+      duration:
+        description: "How long to keep the runner available"
+        type: choice
+        options: ["30", "60", "120"]
+        default: "30"
+        required: true
+      cores:
+        description: "Runner CPU cores"
+        type: choice
+        options: ["4", "16", "64"]
+        default: "16"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: devspace-${{ github.repository }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  devspace:
+    name: Ephemeral OpenSSH devspace
+    runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
+    timeout-minutes: 125
+    steps:
+      - name: Install Tailscale networking prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y iptables openssh-server
+          sudo ln -sfn /usr/local/bin/tailscale /usr/bin/tailscale
+          sudo ln -sfn /usr/local/bin/tailscaled /usr/bin/tailscaled
+          sudo systemctl stop sshd.service
+          if sudo systemctl cat sshd.socket >/dev/null 2>&1; then
+            sudo systemctl stop sshd.socket
+          fi
+          if sudo systemctl is-active --quiet sshd.service || sudo systemctl is-active --quiet sshd.socket; then
+            printf '%s\n' 'refusing to join the tailnet while an SSH listener is active' >&2
+            exit 1
+          fi
+
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:bootc-dev-sandbox
+          hostname: cgwalters-devspace-${{ github.run_id }}
+
+      - name: Install development prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y git procps-ng iproute iputils bind-utils jq tmux
+          id runner
+
+      - name: Prepare OpenSSH and keep the devspace available
+        shell: bash
+        env:
+          DURATION_MINUTES: ${{ inputs.duration }}
+          SSH_PUBLIC_KEY: ${{ inputs.ssh_public_key }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SSH_PUBLIC_KEY" && "$SSH_PUBLIC_KEY" != *$'\n'* && "$SSH_PUBLIC_KEY" != *$'\r'* ]]
+          [[ "$SSH_PUBLIC_KEY" =~ ^ssh-ed25519[[:space:]]+[A-Za-z0-9+/]+={0,2}([[:space:]][^[:cntrl:]]*)?$ ]]
+          [[ "$(getenforce)" == Enforcing ]]
+          duration_seconds=$((DURATION_MINUTES * 60))
+          started=$(date +%s)
+          config=$(mktemp)
+          key_input=$(mktemp)
+          authorized_key=/home/runner/.ssh/devspace-authorized_keys
+          cleanup() {
+            rm -f "$config" "$key_input"
+            sudo rm -f "$authorized_key"
+          }
+          trap cleanup EXIT INT TERM
+          printf '%s\n' "$SSH_PUBLIC_KEY" >"$key_input"
+          sudo ssh-keygen -lf "$key_input" >/dev/null
+          sudo install -d -m 700 -o runner -g runner /home/runner/.ssh
+          sudo chmod 755 /home/runner
+          sudo install -m 600 -o runner -g runner "$key_input" "$authorized_key"
+          sudo restorecon -RF /home/runner/.ssh
+          sudo ssh-keygen -A
+          tailscale_ip=$(sudo tailscale ip -4)
+          [[ "$tailscale_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+          cat >"$config" <<EOF
+          Port 22
+          ListenAddress $tailscale_ip
+          HostKey /etc/ssh/ssh_host_ed25519_key
+          AuthorizedKeysFile /home/runner/.ssh/devspace-authorized_keys
+          AuthenticationMethods publickey
+          PubkeyAuthentication yes
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+          PermitEmptyPasswords no
+          AllowUsers runner
+          PermitTTY yes
+          AllowAgentForwarding no
+          AllowTcpForwarding no
+          AllowStreamLocalForwarding no
+          GatewayPorts no
+          PermitTunnel no
+          X11Forwarding no
+          PermitUserEnvironment no
+          UsePAM yes
+          StrictModes yes
+          EOF
+          sudo install -o root -g root -m 600 "$config" /etc/ssh/sshd_config
+          sudo restorecon /etc/ssh/sshd_config /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub
+          sudo /usr/sbin/sshd -t
+          sudo systemctl restart sshd.service
+          health_check() {
+            local sshd_pid context
+            sudo systemctl is-active --quiet sshd.service
+            sshd_pid=$(sudo systemctl show -p MainPID --value sshd.service)
+            [[ -n "$sshd_pid" && "$sshd_pid" != 0 ]]
+            sudo kill -0 "$sshd_pid"
+            context=$(sudo ps -o label= --no-headers -p "$sshd_pid" | tr -d '[:space:]')
+            [[ "$context" == *:sshd_t:* ]]
+            sudo ss -H -ltn | awk -v endpoint="${tailscale_ip}:22" '$1 == "LISTEN" && $4 ~ /:22$/ { if ($4 != endpoint) bad=1; else found=1 } END { exit (!found || bad) }'
+          }
+          sleep 1
+          health_check
+          printf 'OpenSSH is ready for runner@%s\n' "$(hostname --fqdn)"
+          printf 'Tailscale IPv4: %s\n' "$tailscale_ip"
+          while (( $(date +%s) - started < duration_seconds )); do
+            health_check
+            sudo tailscale status --self
+            sleep 5
+          done

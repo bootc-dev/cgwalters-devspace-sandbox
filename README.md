@@ -1,0 +1,55 @@
+# cgwalters-devspace
+
+This repository dispatches a bounded, disposable RHEL 10 development runner.
+Tailscale supplies private networking inside the remote workflow; access is
+ordinary OpenSSH as user `runner`.
+
+## Prerequisites
+
+Install Rust/Cargo 1.85 or newer. The `cargo devspace` alias is defined in this
+repository's `.cargo/config.toml` and is local to this checkout. Authenticate
+the GitHub CLI (`gh auth login`) with permission to dispatch, view, and cancel
+this repository's workflows. The `ssh` and `ssh-keygen` commands must also be
+available.
+
+An administrator must configure repository variables `TS_OAUTH_CLIENT_ID` and
+`TS_AUDIENCE`. The federated Tailscale identity needs writable `auth_keys`, the
+`tag:bootc-dev-sandbox` tag, and network ACL access from your device to that tag
+on TCP port 22. No repository secret or OAuth client secret is used.
+The client must be connected to the relevant Tailscale network with MagicDNS
+access. The Rust tool uses ordinary OpenSSH and does not invoke the local
+Tailscale CLI, inspect Tailscale status, or use a local Tailscale socket.
+
+## Use
+
+`cargo devspace` has exactly four commands:
+
+```console
+cargo devspace start --duration 30 --cores 16
+cargo devspace list
+cargo devspace ssh RUN_ID
+cargo devspace stop RUN_ID
+```
+
+`start` generates an ephemeral Ed25519 key, records it privately under
+`${XDG_STATE_HOME:-$HOME/.local/state}/devspace` (using XDG_STATE_HOME only when
+it is a nonempty absolute path), dispatches the workflow, and
+prints the exact run ID and URL. It does not wait for readiness or cancel the
+runner. `ssh` repeatedly probes the deterministic MagicDNS hostname
+`cgwalters-devspace-RUN_ID` while the workflow is active, then opens interactive
+OpenSSH with that key. `stop` acts only on the given development run and removes
+its local key after cancellation or after confirming that the run has already
+completed. `list` shows active dispatched-run metadata: run ID, status, title,
+and URL.
+
+The duration choices are 30, 60, and 120 minutes; the workflow has an
+independent 125-minute timeout. Use `--cores 4`, `--cores 16` (the default), or
+`--cores 64` to select a runner size. The runner is disposable: do not store
+secrets on it. `runner-sizes.json` records the corresponding runner labels.
+
+If dispatch cannot be correlated, the CLI retains the pending private key and
+identifies its session so the run can be located manually.
+
+The workflow runs stock `sshd.service`, binds it only to the Tailscale IPv4
+address, and enforces a public-key-only configuration. Its keepalive verifies
+the service, SELinux context, and bound address every five seconds.

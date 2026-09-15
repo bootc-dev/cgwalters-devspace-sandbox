@@ -1,0 +1,2 @@
+[alias]
+devspace = "run --quiet --bin devspace --"
