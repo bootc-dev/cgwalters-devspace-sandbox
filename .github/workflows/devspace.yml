@@ -16,8 +16,8 @@ on:
       duration:
         description: "How long to keep the runner available"
         type: choice
-        options: ["30", "60", "120"]
-        default: "30"
+        options: ["30", "60", "120", "240"]
+        default: "240"
         required: true
       cores:
         description: "Runner CPU cores"
@@ -38,7 +38,7 @@ jobs:
   devspace:
     name: Ephemeral OpenSSH devspace
     runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
-    timeout-minutes: 125
+    timeout-minutes: 270
     steps:
       - name: Install Tailscale networking prerequisite
         shell: bash
@@ -68,8 +68,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo dnf install -y git procps-ng iproute iputils bind-utils jq tmux
+          sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+          sudo dnf install -y git just make rsync procps-ng iproute iputils bind-utils jq tmux
           id runner
+
+      - name: Check out devspace configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Initialize runner configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u runner -H just init
 
       - name: Prepare OpenSSH and keep the devspace available
         shell: bash
@@ -82,7 +94,6 @@ jobs:
           [[ "$SSH_PUBLIC_KEY" =~ ^ssh-ed25519[[:space:]]+[A-Za-z0-9+/]+={0,2}([[:space:]][^[:cntrl:]]*)?$ ]]
           [[ "$(getenforce)" == Enforcing ]]
           duration_seconds=$((DURATION_MINUTES * 60))
-          started=$(date +%s)
           config=$(mktemp)
           key_input=$(mktemp)
           authorized_key=/home/runner/.ssh/devspace-authorized_keys
@@ -141,6 +152,7 @@ jobs:
           health_check
           printf 'OpenSSH is ready for runner@%s\n' "$(hostname --fqdn)"
           printf 'Tailscale IPv4: %s\n' "$tailscale_ip"
+          started=$(date +%s)
           while (( $(date +%s) - started < duration_seconds )); do
             health_check
             sudo tailscale status --self

@@ -25,7 +25,7 @@ Tailscale CLI, inspect Tailscale status, or use a local Tailscale socket.
 `cargo devspace` has exactly four commands:
 
 ```console
-cargo devspace start --duration 30 --cores 16
+cargo devspace start --duration 240 --cores 16
 cargo devspace list
 cargo devspace ssh RUN_ID
 cargo devspace stop RUN_ID
@@ -42,10 +42,11 @@ its local key after cancellation or after confirming that the run has already
 completed. `list` shows active dispatched-run metadata: run ID, status, title,
 and URL.
 
-The duration choices are 30, 60, and 120 minutes; the workflow has an
-independent 125-minute timeout. Use `--cores 4`, `--cores 16` (the default), or
-`--cores 64` to select a runner size. The runner is disposable: do not store
-secrets on it. `runner-sizes.json` records the corresponding runner labels.
+The duration choices are 30, 60, 120, and 240 minutes (the default); the
+workflow's 270-minute timeout allows setup plus the full four-hour lifetime.
+Use `--cores 4`, `--cores 16` (the default), or `--cores 64` to select a runner
+size. The runner is disposable: do not store secrets on it.
+`runner-sizes.json` records the corresponding runner labels.
 
 If dispatch cannot be correlated, the CLI retains the pending private key and
 identifies its session so the run can be located manually.
@@ -53,3 +54,13 @@ identifies its session so the run can be located manually.
 The workflow runs stock `sshd.service`, binds it only to the Tailscale IPv4
 address, and enforces a public-key-only configuration. Its keepalive verifies
 the service, SELinux context, and bound address every five seconds.
+
+Before OpenSSH is made available, the runner automatically installs the user's
+[homegit](https://github.com/cgwalters/homegit) configuration. The checkout is
+created at `$HOME/src/github/cgwalters/homegit` when absent; existing checkouts
+are reused without pulling updates.
+
+## TODO / roadmap
+
+- Later, support launching an agent that can work autonomously and push changes
+  with safe, scoped credentials, while preserving interactive access.

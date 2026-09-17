@@ -40,7 +40,7 @@ enum CommandLine {
 #[derive(Args, Debug)]
 struct StartArgs {
     /// Runner lifetime in minutes.
-    #[arg(long, default_value_t = DurationMinutes::Thirty, help = "Runner lifetime in minutes (30, 60, or 120)")]
+    #[arg(long, default_value_t = DurationMinutes::TwoForty, help = "Runner lifetime in minutes (30, 60, 120, or 240)")]
     duration: DurationMinutes,
     /// Runner CPU cores; choices are loaded from runner-sizes.json.
     #[arg(long, value_parser = parse_cores, default_value_t = 16, help = "Runner CPU cores loaded from runner-sizes.json (default: 16)")]
@@ -62,6 +62,8 @@ enum DurationMinutes {
     Sixty,
     #[value(name = "120")]
     OneTwenty,
+    #[value(name = "240")]
+    TwoForty,
 }
 impl DurationMinutes {
     fn as_str(self) -> &'static str {
@@ -69,6 +71,7 @@ impl DurationMinutes {
             Self::Thirty => "30",
             Self::Sixty => "60",
             Self::OneTwenty => "120",
+            Self::TwoForty => "240",
         }
     }
 }
@@ -704,12 +707,15 @@ mod tests {
         let cli = Cli::try_parse_from(["devspace", "start"]).unwrap();
         if let CommandLine::Start(a) = cli.command {
             assert_eq!(a.cores, 16);
-            assert_eq!(a.duration, DurationMinutes::Thirty);
+            assert_eq!(a.duration, DurationMinutes::TwoForty);
         } else {
             panic!()
         }
         assert!(Cli::try_parse_from(["devspace", "start", "--cores", "8"]).is_err());
         assert!(Cli::try_parse_from(["devspace", "start", "--duration", "45"]).is_err());
+        for duration in ["30", "60", "120", "240"] {
+            assert!(Cli::try_parse_from(["devspace", "start", "--duration", duration]).is_ok());
+        }
         assert!(Cli::try_parse_from(["devspace", "ssh", "x"]).is_err());
     }
     #[test]
@@ -963,6 +969,48 @@ mod tests {
             .map(|value| value.as_str().unwrap().to_string())
             .collect();
         assert_eq!(labels, sizes.values().cloned().collect());
+    }
+    #[test]
+    fn durations_match_workflow() {
+        let workflow = fs::read_to_string(".github/workflows/devspace.yml").unwrap();
+        let workflow_yaml: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();
+        let dispatch = find_yaml_key(&workflow_yaml, "workflow_dispatch").unwrap();
+        let inputs = find_yaml_key(dispatch, "inputs").unwrap();
+        let duration_input = find_yaml_key(inputs, "duration").unwrap();
+        assert_eq!(
+            find_yaml_key(duration_input, "default").unwrap().as_str(),
+            Some("240")
+        );
+        let choices: Vec<_> = find_yaml_key(duration_input, "options")
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        assert_eq!(choices, ["30", "60", "120", "240"]);
+        assert_eq!(
+            find_yaml_key(&workflow_yaml, "timeout-minutes")
+                .unwrap()
+                .as_i64(),
+            Some(270)
+        );
+    }
+    #[test]
+    fn workflow_initializes_homegit_before_openssh() {
+        let workflow = fs::read_to_string(".github/workflows/devspace.yml").unwrap();
+        let checkout = "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683";
+        let epel = "epel-release-latest-10.noarch.rpm";
+        let dependencies = "sudo dnf install -y git just make rsync";
+        let init = "sudo -u runner -H just init";
+        let openssh = "- name: Prepare OpenSSH and keep the devspace available";
+        assert!(workflow.contains(checkout));
+        assert!(workflow.contains("persist-credentials: false"));
+        assert!(workflow.contains(epel));
+        assert!(workflow.contains(dependencies));
+        assert!(workflow.contains(init));
+        assert!(workflow.find(checkout).unwrap() < workflow.find(init).unwrap());
+        assert!(workflow.find(init).unwrap() < workflow.find(openssh).unwrap());
     }
     #[test]
     fn list_format_and_dispatch_arguments_are_stable() {
