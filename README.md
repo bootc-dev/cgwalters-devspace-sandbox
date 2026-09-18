@@ -33,9 +33,10 @@ cargo devspace stop RUN_ID
 
 `start` generates an ephemeral Ed25519 key, records it privately under
 `${XDG_STATE_HOME:-$HOME/.local/state}/devspace` (using XDG_STATE_HOME only when
-it is a nonempty absolute path), dispatches the workflow, and
-prints the exact run ID and URL. It does not wait for readiness or cancel the
-runner. `ssh` repeatedly probes the deterministic MagicDNS hostname
+it is a nonempty absolute path), dispatches the workflow, and prints the exact
+run ID and URL immediately. It then waits until ordinary SSH is ready before
+returning. It does not open an SSH session or cancel the runner. `ssh`
+repeatedly probes the deterministic MagicDNS hostname
 `cgwalters-devspace-RUN_ID` while the workflow is active, then opens interactive
 OpenSSH with that key. `stop` acts only on the given development run and removes
 its local key after cancellation or after confirming that the run has already
