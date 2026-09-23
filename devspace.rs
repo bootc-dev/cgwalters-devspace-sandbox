@@ -997,6 +997,28 @@ mod tests {
         );
     }
     #[test]
+    fn justfile_pins_homegit_with_renovate_annotation() {
+        let justfile = fs::read_to_string("Justfile").unwrap();
+        let annotation = "# renovate: datasource=git-refs depName=https://github.com/cgwalters-bot/homegit branch=main";
+        let mut lines = justfile.lines().skip_while(|line| *line != annotation);
+        assert!(lines.next().is_some(), "Justfile is missing {annotation:?}");
+        let rev_line = lines.next().unwrap();
+        let rev = rev_line
+            .strip_prefix("homegit_rev := \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .unwrap_or_else(|| panic!("unexpected homegit_rev line {rev_line:?}"));
+        assert!(
+            rev.len() == 40 && rev.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "homegit_rev must be a full commit SHA, got {rev:?}"
+        );
+        // The runner's umask is 000; dotfiles must not be installed world-writable.
+        let umask = justfile
+            .find("    umask 022\n")
+            .expect("init must set umask 022");
+        assert!(umask < justfile.find("git clone").unwrap());
+        assert!(umask < justfile.find("make -C \"$homegit\" install").unwrap());
+    }
+    #[test]
     fn workflow_initializes_homegit_before_openssh() {
         let workflow = fs::read_to_string(".github/workflows/devspace.yml").unwrap();
         let checkout = "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683";
