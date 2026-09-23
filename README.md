@@ -65,6 +65,11 @@ reviewed pull requests. The checkout is created at
 are moved to the pinned commit, fetching it if needed. Interactive users on the
 runner therefore get the bot's git identity from its `.gitconfig`.
 
+The opencode and Claude Code agent CLIs are preinstalled globally with npm
+(from the RHEL `nodejs` package). Their exact versions are pinned in `npm.txt`,
+which Renovate keeps current via the shared bootc-dev configuration. Agent
+credentials are not provisioned.
+
 ## TODO / roadmap
 
 - Later, support launching an agent that can work autonomously and push changes

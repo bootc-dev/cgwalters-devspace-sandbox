@@ -1,0 +1,4 @@
+# renovate: datasource=npm depName=opencode-ai
+opencode-ai@1.18.31
+# renovate: datasource=npm depName=@anthropic-ai/claude-code
+@anthropic-ai/claude-code@2.1.267
