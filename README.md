@@ -67,8 +67,9 @@ runner therefore get the bot's git identity from its `.gitconfig`.
 
 The opencode and Claude Code agent CLIs are preinstalled globally with npm
 (from the RHEL `nodejs` package). Their exact versions are pinned in `npm.txt`,
-which Renovate keeps current via the shared bootc-dev configuration. Agent
-credentials are not provisioned.
+which Renovate keeps current via the shared bootc-dev configuration. The
+GitHub CLI, which the bot's tools call for every GitHub operation, comes from
+EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
 
 ## TODO / roadmap
 
