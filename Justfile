@@ -1,5 +1,5 @@
 # renovate: datasource=git-refs depName=https://github.com/cgwalters-bot/homegit branch=main
-homegit_rev := "23d5662ff24e7aef8abb73ecfa7b1fa8cb9395c4"
+homegit_rev := "a6c938fc4bec229d5f9932810b49fb30398e1276"
 
 # Install the bot's dotfiles from the pinned homegit revision.
 init:
