@@ -55,10 +55,20 @@ The workflow runs stock `sshd.service`, binds it only to the Tailscale IPv4
 address, and enforces a public-key-only configuration. Its keepalive verifies
 the service, SELinux context, and bound address every five seconds.
 
-Before OpenSSH is made available, the runner automatically installs the user's
-[homegit](https://github.com/cgwalters/homegit) configuration. The checkout is
-created at `$HOME/src/github/cgwalters/homegit` when absent; existing checkouts
-are reused without pulling updates.
+The runner hosts [cgwalters-bot](https://github.com/cgwalters-bot) agent
+sessions. Before OpenSSH is made available, it automatically installs the bot's
+[homegit](https://github.com/cgwalters-bot/homegit) dotfiles, skills, and agent
+configuration. Because the runner executes homegit code, it is pinned to the
+commit in the `Justfile`'s `homegit_rev`, which Renovate bumps through
+reviewed pull requests. The checkout is created at
+`$HOME/src/github/cgwalters-bot/homegit` when absent, and existing checkouts
+are moved to the pinned commit, fetching it if needed. Interactive users on the
+runner therefore get the bot's git identity from its `.gitconfig`.
+
+The opencode and Claude Code agent CLIs are preinstalled globally with npm
+(from the RHEL `nodejs` package). Their exact versions are pinned in `npm.txt`,
+which Renovate keeps current via the shared bootc-dev configuration. Agent
+credentials are not provisioned.
 
 ## TODO / roadmap
 

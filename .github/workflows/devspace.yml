@@ -77,6 +77,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install agent CLIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y nodejs npm
+          grep -vE '^\s*(#|$)' npm.txt | xargs -r sudo npm install -g --no-audit --no-fund
+          bindir="$(sudo npm prefix -g)/bin"
+          for tool in opencode claude; do
+            sudo -u runner -H "$bindir/$tool" --version
+          done
+
       - name: Initialize runner configuration
         shell: bash
         run: |

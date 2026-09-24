@@ -997,20 +997,119 @@ mod tests {
         );
     }
     #[test]
+    fn justfile_pins_homegit_with_renovate_annotation() {
+        let justfile = fs::read_to_string("Justfile").unwrap();
+        let annotation = "# renovate: datasource=git-refs depName=https://github.com/cgwalters-bot/homegit branch=main";
+        let mut lines = justfile.lines().skip_while(|line| *line != annotation);
+        assert!(lines.next().is_some(), "Justfile is missing {annotation:?}");
+        let rev_line = lines.next().unwrap();
+        let rev = rev_line
+            .strip_prefix("homegit_rev := \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .unwrap_or_else(|| panic!("unexpected homegit_rev line {rev_line:?}"));
+        assert!(
+            rev.len() == 40 && rev.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "homegit_rev must be a full commit SHA, got {rev:?}"
+        );
+        // The runner's umask is 000; dotfiles must not be installed world-writable.
+        let umask = justfile
+            .find("    umask 022\n")
+            .expect("init must set umask 022");
+        assert!(umask < justfile.find("git clone").unwrap());
+        assert!(umask < justfile.find("make -C \"$homegit\" install").unwrap());
+    }
+    #[test]
     fn workflow_initializes_homegit_before_openssh() {
-        let workflow = fs::read_to_string(".github/workflows/devspace.yml").unwrap();
-        let checkout = "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683";
-        let epel = "epel-release-latest-10.noarch.rpm";
-        let dependencies = "sudo dnf install -y git just make rsync";
-        let init = "sudo -u runner -H just init";
-        let openssh = "- name: Prepare OpenSSH and keep the devspace available";
-        assert!(workflow.contains(checkout));
-        assert!(workflow.contains("persist-credentials: false"));
-        assert!(workflow.contains(epel));
-        assert!(workflow.contains(dependencies));
-        assert!(workflow.contains(init));
-        assert!(workflow.find(checkout).unwrap() < workflow.find(init).unwrap());
-        assert!(workflow.find(init).unwrap() < workflow.find(openssh).unwrap());
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(".github/workflows/devspace.yml").unwrap())
+                .unwrap();
+        let steps = find_yaml_key(&workflow, "steps")
+            .unwrap()
+            .as_sequence()
+            .unwrap();
+        let step = |name: &str| {
+            steps
+                .iter()
+                .position(|step| step["name"].as_str() == Some(name))
+                .map(|index| (index, &steps[index]))
+                .unwrap_or_else(|| panic!("workflow is missing step {name:?}"))
+        };
+        let run = |value: &serde_yaml::Value| value["run"].as_str().unwrap().to_string();
+        // (step name, expected run snippets), in the order the steps must run.
+        let expected: [(&str, &[&str]); 5] = [
+            (
+                "Install development prerequisites",
+                &[
+                    "epel-release-latest-10.noarch.rpm",
+                    "sudo dnf install -y git just make rsync",
+                ],
+            ),
+            ("Check out devspace configuration", &[]),
+            (
+                "Install agent CLIs",
+                &[
+                    "sudo dnf install -y nodejs npm",
+                    "grep -vE '^\\s*(#|$)' npm.txt | xargs -r sudo npm install -g --no-audit --no-fund",
+                    "for tool in opencode claude; do",
+                ],
+            ),
+            (
+                "Initialize runner configuration",
+                &["sudo -u runner -H just init"],
+            ),
+            ("Prepare OpenSSH and keep the devspace available", &[]),
+        ];
+        let mut previous = None;
+        for (name, snippets) in expected {
+            let (index, value) = step(name);
+            assert!(
+                previous < Some(index),
+                "step {name:?} is out of order in the workflow"
+            );
+            previous = Some(index);
+            for snippet in snippets {
+                assert!(run(value).contains(snippet), "{name:?} lacks {snippet:?}");
+            }
+        }
+        let (_, checkout) = step("Check out devspace configuration");
+        assert_eq!(
+            checkout["uses"].as_str(),
+            Some("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683")
+        );
+        assert_eq!(
+            checkout["with"]["persist-credentials"].as_bool(),
+            Some(false)
+        );
+    }
+    #[test]
+    fn npm_pins_are_exact_and_renovate_annotated() {
+        let npm = fs::read_to_string("npm.txt").unwrap();
+        let lines: Vec<_> = npm.lines().filter(|line| !line.trim().is_empty()).collect();
+        let mut packages = Vec::new();
+        for pair in lines.chunks(2) {
+            let [comment, spec] = pair else {
+                panic!("npm.txt entry is missing its package line: {pair:?}");
+            };
+            let name = comment
+                .strip_prefix("# renovate: datasource=npm depName=")
+                .unwrap_or_else(|| panic!("expected a renovate annotation, got {comment:?}"));
+            let version = spec
+                .strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix('@'))
+                .unwrap_or_else(|| panic!("{spec:?} does not pin {name}"));
+            assert!(
+                !version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.'),
+                "{name} must be pinned to an exact version, got {version:?}"
+            );
+            packages.push(name);
+        }
+        assert_eq!(packages, ["opencode-ai", "@anthropic-ai/claude-code"]);
+        let renovate: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string("renovate.json").unwrap()).unwrap();
+        assert_eq!(
+            renovate["extends"],
+            serde_json::json!(["local>bootc-dev/infra:renovate-shared-config.json"])
+        );
     }
     #[test]
     fn list_format_and_dispatch_arguments_are_stable() {
