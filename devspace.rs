@@ -1075,7 +1075,7 @@ mod tests {
         };
         let run = |value: &serde_yaml::Value| value["run"].as_str().unwrap().to_string();
         // (step name, expected run snippets), in the order the steps must run.
-        let expected: [(&str, &[&str]); 5] = [
+        let expected: [(&str, &[&str]); 6] = [
             (
                 "Install development prerequisites",
                 &[
@@ -1091,6 +1091,10 @@ mod tests {
                     "grep -vE '^\\s*(#|$)' npm.txt | xargs -r sudo npm install -g --no-audit --no-fund",
                     "for tool in opencode claude; do",
                 ],
+            ),
+            (
+                "Install the development toolchain",
+                &["packages.txt | xargs sudo dnf install -y"],
             ),
             (
                 "Initialize runner configuration",

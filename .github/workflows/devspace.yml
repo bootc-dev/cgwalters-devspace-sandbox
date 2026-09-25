@@ -90,6 +90,12 @@ jobs:
             sudo -u runner -H "$bindir/$tool" --version
           done
 
+      - name: Install the development toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -e 's/#.*//' packages.txt | xargs sudo dnf install -y
+
       - name: Initialize runner configuration
         shell: bash
         run: |
