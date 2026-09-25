@@ -4,11 +4,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use xshell::{Shell, cmd};
@@ -17,6 +17,9 @@ const REPO: &str = "bootc-dev/cgwalters-devspace-sandbox";
 const WORKFLOW: &str = "devspace.yml";
 const WORKFLOW_NAME: &str = "Development runner";
 const WAIT: Duration = Duration::from_secs(180);
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const PROBE_WAIT: Duration = Duration::from_secs(12);
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Parser, Debug)]
 #[command(about = "Manage disposable development runners.")]
@@ -27,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum CommandLine {
-    /// Dispatch a disposable development runner.
+    /// Dispatch a disposable development runner and wait for ordinary SSH readiness.
     Start(StartArgs),
     /// List active workflow-dispatched development runners.
     List,
@@ -286,6 +289,167 @@ fn gh_json(args: &[&str]) -> Result<serde_json::Value> {
     }
     parse_json(&String::from_utf8_lossy(&output.stdout))
 }
+fn read_stream<R: Read + Send + 'static>(mut stream: R) -> thread::JoinHandle<io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+fn join_stream(
+    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    stream_name: &str,
+) -> Result<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("reading {stream_name} panicked"))?
+        .with_context(|| format!("reading {stream_name}"))
+}
+fn rustix_error(error: rustix::io::Errno) -> io::Error {
+    io::Error::from_raw_os_error(error.raw_os_error())
+}
+fn spawn_in_process_group(
+    command: &mut Command,
+    description: &str,
+) -> Result<(Child, rustix::process::Pid)> {
+    // SAFETY: The closure only invokes the async-signal-safe setpgid syscall
+    // before exec, creating a process group containing the child and descendants.
+    unsafe {
+        command.pre_exec(|| rustix::process::setpgid(None, None).map_err(rustix_error));
+    }
+    let child = command
+        .spawn()
+        .with_context(|| format!("running {description}"))?;
+    let raw_pid = i32::try_from(child.id()).context("converting child process ID")?;
+    let group =
+        rustix::process::Pid::from_raw(raw_pid).context("child has an invalid process ID")?;
+    Ok((child, group))
+}
+fn terminate_and_reap(child: &mut Child, group: rustix::process::Pid) -> Result<()> {
+    let kill_error = rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+        .err()
+        .filter(|error| *error != rustix::io::Errno::SRCH);
+    let wait_error = child.wait().err();
+    if let Some(error) = kill_error {
+        return Err(rustix_error(error)).context("stopping command");
+    }
+    if let Some(error) = wait_error {
+        return Err(error).context("collecting stopped command");
+    }
+    Ok(())
+}
+fn join_streams(
+    stdout: thread::JoinHandle<io::Result<Vec<u8>>>,
+    stderr: thread::JoinHandle<io::Result<Vec<u8>>>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let stdout = join_stream(stdout, "command stdout");
+    let stderr = join_stream(stderr, "command stderr");
+    match (stdout, stderr) {
+        (Ok(stdout), Ok(stderr)) => Ok((stdout, stderr)),
+        (Err(stdout), Ok(_)) => Err(stdout),
+        (Ok(_), Err(stderr)) => Err(stderr),
+        (Err(stdout), Err(stderr)) => bail!("reading command output failed: {stdout}; {stderr}"),
+    }
+}
+fn output_from_streams_before_deadline(
+    child: &mut Child,
+    group: rustix::process::Pid,
+    status: ExitStatus,
+    stdout: thread::JoinHandle<io::Result<Vec<u8>>>,
+    stderr: thread::JoinHandle<io::Result<Vec<u8>>>,
+    deadline: Instant,
+    description: &str,
+) -> Result<Output> {
+    while !stdout.is_finished() || !stderr.is_finished() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let cleanup = terminate_and_reap(child, group);
+            let streams = join_streams(stdout, stderr);
+            if let Err(error) = cleanup {
+                return Err(error)
+                    .with_context(|| format!("stopping {description} after readiness timeout"));
+            }
+            streams?;
+            bail!("{description} did not return before SSH readiness timeout");
+        }
+        thread::sleep(STATUS_POLL_INTERVAL.min(remaining));
+    }
+    let (stdout, stderr) = join_streams(stdout, stderr)?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+fn command_output_before_deadline(
+    command: &mut Command,
+    deadline: Instant,
+    description: &str,
+) -> Result<Output> {
+    if Instant::now() >= deadline {
+        bail!("{description} did not return before SSH readiness timeout");
+    }
+    let (mut child, group) = spawn_in_process_group(
+        command.stdout(Stdio::piped()).stderr(Stdio::piped()),
+        description,
+    )?;
+    let stdout = match child.stdout.take() {
+        Some(stream) => read_stream(stream),
+        None => {
+            let _ = terminate_and_reap(&mut child, group);
+            bail!("{description} stdout was not captured");
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stream) => read_stream(stream),
+        None => {
+            let _ = terminate_and_reap(&mut child, group);
+            let _ = join_stream(stdout, "command stdout");
+            bail!("{description} stderr was not captured");
+        }
+    };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return output_from_streams_before_deadline(
+                    &mut child,
+                    group,
+                    status,
+                    stdout,
+                    stderr,
+                    deadline,
+                    description,
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = terminate_and_reap(&mut child, group);
+                let _ = join_streams(stdout, stderr);
+                return Err(error).with_context(|| format!("checking {description}"));
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let cleanup = terminate_and_reap(&mut child, group);
+            let streams = join_streams(stdout, stderr);
+            if let Err(error) = cleanup {
+                return Err(error)
+                    .with_context(|| format!("stopping {description} after readiness timeout"));
+            }
+            streams?;
+            bail!("{description} did not return before SSH readiness timeout");
+        }
+        thread::sleep(STATUS_POLL_INTERVAL.min(remaining));
+    }
+}
+fn gh_json_before_deadline(args: &[&str], deadline: Instant) -> Result<serde_json::Value> {
+    let output =
+        command_output_before_deadline(Command::new("gh").args(args), deadline, "gh run view")?;
+    if !output.status.success() {
+        bail!("gh failed: {}", diagnostic(&output));
+    }
+    parse_json(&String::from_utf8_lossy(&output.stdout))
+}
 fn dispatch_runs() -> Result<Vec<Run>> {
     let value = gh_json(&[
         "run",
@@ -424,8 +588,23 @@ fn workflow_details(id: u64) -> Result<Details> {
     ])?)
     .context("gh returned an unexpected workflow status")
 }
-fn ensure_active(id: u64) -> Result<()> {
-    let details = workflow_details(id)?;
+fn workflow_details_before_deadline(id: u64, deadline: Instant) -> Result<Details> {
+    serde_json::from_value(gh_json_before_deadline(
+        &[
+            "run",
+            "view",
+            &id.to_string(),
+            "--repo",
+            REPO,
+            "--json",
+            "workflowName,status,conclusion",
+        ],
+        deadline,
+    )?)
+    .context("gh returned an unexpected workflow status")
+}
+fn ensure_active_before_deadline(id: u64, deadline: Instant) -> Result<()> {
+    let details = workflow_details_before_deadline(id, deadline)?;
     ensure_active_details(&details)
 }
 fn ensure_active_details(details: &Details) -> Result<()> {
@@ -441,27 +620,89 @@ fn ensure_active_details(details: &Details) -> Result<()> {
     }
 }
 
-fn ssh_probe(key: &Path, known_hosts: &Path, host: &str) -> Result<bool> {
+fn ssh_probe(key: &Path, known_hosts: &Path, host: &str, deadline: Instant) -> Result<bool> {
+    if Instant::now() >= deadline {
+        return Ok(false);
+    }
     let args = ssh_probe_command(key, known_hosts, host);
-    let mut child = Command::new(&args[0])
+    let mut command = Command::new(&args[0]);
+    command
         .args(&args[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("running ssh readiness probe")?;
-    let deadline = Instant::now() + Duration::from_secs(12);
+        .stderr(Stdio::null());
+    let (mut child, group) = spawn_in_process_group(&mut command, "ssh readiness probe")?;
+    let deadline = deadline.min(Instant::now() + PROBE_WAIT);
     loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status.success());
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) => {}
+            Err(error) => {
+                let cleanup = terminate_and_reap(&mut child, group);
+                if let Err(cleanup) = cleanup {
+                    return Err(cleanup).context("cleaning up failed ssh readiness probe");
+                }
+                return Err(error).context("checking ssh readiness probe");
+            }
         }
         if Instant::now() >= deadline {
-            child.kill()?;
-            child.wait()?;
+            terminate_and_reap(&mut child, group)
+                .context("cleaning up timed out ssh readiness probe")?;
             return Ok(false);
         }
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(STATUS_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
     }
+}
+
+fn known_hosts_path(key: &Path) -> Result<PathBuf> {
+    let parent = key
+        .parent()
+        .context("managed key has no parent directory")?;
+    let known_hosts = parent.join("known_hosts");
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&known_hosts)
+        .with_context(|| format!("creating {}", known_hosts.display()))?;
+    chmod(&known_hosts, 0o600)?;
+    Ok(known_hosts)
+}
+
+fn wait_for_ssh_ready<EnsureActive, Probe>(
+    id: u64,
+    timeout: Duration,
+    mut ensure_active: EnsureActive,
+    mut probe: Probe,
+) -> Result<()>
+where
+    EnsureActive: FnMut(Instant) -> Result<()>,
+    Probe: FnMut(Instant) -> Result<bool>,
+{
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        ensure_active(deadline)?;
+        if probe(deadline)? {
+            // The workflow can complete between the initial status check and
+            // the successful probe, so validate it once more before reporting
+            // readiness.
+            ensure_active(deadline)?;
+            return Ok(());
+        }
+        thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+    bail!("ordinary SSH for workflow {id} was not ready before timeout")
+}
+
+fn wait_for_run_ssh(id: u64, key: &Path) -> Result<()> {
+    let known_hosts = known_hosts_path(key)?;
+    let host = hostname(id);
+    wait_for_ssh_ready(
+        id,
+        WAIT,
+        |deadline| ensure_active_before_deadline(id, deadline),
+        |deadline| ssh_probe(key, &known_hosts, &host, deadline),
+    )
 }
 
 fn command_start(args: StartArgs) -> Result<()> {
@@ -544,6 +785,8 @@ fn command_start(args: StartArgs) -> Result<()> {
                 )
             })?;
             println!("Run {id}: {}", run.url);
+            io::stdout().flush().context("flushing run details")?;
+            wait_for_run_ssh(id, &destination.join("id_ed25519"))?;
             return Ok(());
         }
         thread::sleep(Duration::from_secs(2));
@@ -568,30 +811,10 @@ fn command_ssh(args: RunArgs) -> Result<()> {
             args.run_id
         );
     }
-    let known_hosts = key.parent().unwrap().join("known_hosts");
-    if !known_hosts.exists() {
-        OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&known_hosts)?;
-    }
-    chmod(&known_hosts, 0o600)?;
-    let host = hostname(args.run_id);
-    let deadline = Instant::now() + WAIT;
-    while Instant::now() < deadline {
-        ensure_active(args.run_id)?;
-        if ssh_probe(&key, &known_hosts, &host)? {
-            let command = ssh_command(&key, &known_hosts, &host);
-            return Err(Command::new(&command[0]).args(&command[1..]).exec())
-                .context("execing ssh");
-        }
-        thread::sleep(Duration::from_secs(2));
-    }
-    bail!(
-        "ordinary SSH for workflow {} was not ready before timeout",
-        args.run_id
-    )
+    wait_for_run_ssh(args.run_id, &key)?;
+    let known_hosts = known_hosts_path(&key)?;
+    let command = ssh_command(&key, &known_hosts, &hostname(args.run_id));
+    Err(Command::new(&command[0]).args(&command[1..]).exec()).context("execing ssh")
 }
 fn remove_state(id: u64) -> Result<()> {
     let path = state_path(id)?;
@@ -1172,5 +1395,146 @@ mod tests {
             ..managed
         };
         assert!(stop_decision(&race).is_err());
+    }
+    #[test]
+    fn ssh_readiness_returns_when_probe_succeeds() {
+        let mut active_checks = 0;
+        let mut probes = 0;
+        wait_for_ssh_ready(
+            7,
+            Duration::from_secs(1),
+            |_| {
+                active_checks += 1;
+                Ok(())
+            },
+            |_| {
+                probes += 1;
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert_eq!(active_checks, 2);
+        assert_eq!(probes, 1);
+    }
+    #[test]
+    fn ssh_readiness_preserves_workflow_ended_error() {
+        let error = wait_for_ssh_ready(
+            7,
+            Duration::from_secs(1),
+            |_| bail!("workflow completed (failure)"),
+            |_| unreachable!("must not probe a completed workflow"),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "workflow completed (failure)");
+    }
+    #[test]
+    fn ssh_readiness_polls_until_probe_succeeds() {
+        let mut active_checks = 0;
+        let mut probes = 0;
+        wait_for_ssh_ready(
+            7,
+            Duration::from_secs(3),
+            |_| {
+                active_checks += 1;
+                Ok(())
+            },
+            |_| {
+                probes += 1;
+                Ok(probes == 2)
+            },
+        )
+        .unwrap();
+        assert_eq!(probes, 2);
+        assert_eq!(active_checks, 3);
+    }
+    #[test]
+    fn ssh_readiness_rechecks_workflow_after_successful_probe() {
+        let mut active_checks = 0;
+        let error = wait_for_ssh_ready(
+            7,
+            Duration::from_secs(1),
+            |_| {
+                active_checks += 1;
+                if active_checks == 2 {
+                    bail!("workflow completed (failure)");
+                }
+                Ok(())
+            },
+            |_| Ok(true),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "workflow completed (failure)");
+    }
+    #[test]
+    fn ssh_readiness_timeout_does_not_oversleep_poll_interval() {
+        let started = Instant::now();
+        let mut probes = 0;
+        let error = wait_for_ssh_ready(
+            7,
+            Duration::from_millis(20),
+            |_| Ok(()),
+            |_| {
+                probes += 1;
+                Ok(false)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(probes, 1);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            error.to_string(),
+            "ordinary SSH for workflow 7 was not ready before timeout"
+        );
+    }
+    #[test]
+    fn bounded_command_drains_both_output_streams() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "i=0; while [ \"$i\" -lt 10000 ]; do printf 0123456789; printf abcdefghij >&2; i=$((i + 1)); done",
+        ]);
+        let output = command_output_before_deadline(
+            &mut command,
+            Instant::now() + Duration::from_secs(5),
+            "test command",
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 100_000);
+        assert_eq!(output.stderr.len(), 100_000);
+    }
+    #[test]
+    fn bounded_command_stops_at_deadline() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        let error = command_output_before_deadline(
+            &mut command,
+            started + Duration::from_millis(20),
+            "test command",
+        )
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            error.to_string(),
+            "test command did not return before SSH readiness timeout"
+        );
+    }
+    #[test]
+    fn bounded_command_stops_descendant_holding_output() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 &"]);
+        let started = Instant::now();
+        let error = command_output_before_deadline(
+            &mut command,
+            started + Duration::from_millis(20),
+            "test command",
+        )
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            error.to_string(),
+            "test command did not return before SSH readiness timeout"
+        );
     }
 }
