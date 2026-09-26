@@ -1,0 +1,37 @@
+{
+  "schema": "bot-harness-result/v1",
+  "agent": "opencode",
+  "command": [
+    "sudo",
+    "systemd-run",
+    "--quiet",
+    "--collect",
+    "--wait",
+    "--pipe",
+    "--service-type=exec",
+    "--slice=agent.slice",
+    "--uid=runner-sandbox",
+    "--gid=runner-sandbox",
+    "--working-directory=/home/runner-sandbox/work/cgwalters-devspace-sandbox",
+    "--setenv=HOME=/home/runner-sandbox",
+    "--setenv=USER=runner-sandbox",
+    "--setenv=LOGNAME=runner-sandbox",
+    "--setenv=LANG=C.UTF-8",
+    "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
+    "--",
+    "env",
+    "opencode",
+    "acp"
+  ],
+  "result": "success",
+  "stop_reason": "end_turn",
+  "message": null,
+  "started_at": "2026-09-26T03:14:51Z",
+  "finished_at": "2026-09-26T03:14:53Z",
+  "duration_s": 2,
+  "limits": {
+    "timeout_s": 600,
+    "budget_aic": 500.0,
+    "max_tool_calls": null
+  }
+}

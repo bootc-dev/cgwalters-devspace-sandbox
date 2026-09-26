@@ -1,0 +1,13 @@
+[
+  {"say": "Fake run: exercising the tools, the sandbox, the permission policy and the redaction pass."},
+  {"execute": {"title": "Bash", "command": "git log --oneline -1 && id -un"}},
+  {"read": {"title": "Read", "path": "{cwd}/README.md", "lines": 5}},
+  {"execute": {"title": "Bash", "command": "sudo -n true"}},
+  {"execute": {"title": "Bash", "command": "curl -sS -m 10 -o /dev/null -w '%{http_code}\\n' http://169.254.169.254/"}},
+  {"execute": {"title": "Bash", "command": "printf 'fake secret: gh%s_%s\\n' p FAKEREDACTIONCANARY0123456789abcdef"}},
+  {"execute": {"title": "Bash", "command": "git push origin HEAD"}},
+  {"write": {"title": "Write", "path": "{cwd}/FAKE.md", "content": "Written by a fake agent run.\n"}},
+  {"write": {"title": "Write", "path": "{home}/out/outcome.json", "content": "{\"tests\": [{\"command\": \"git log --oneline -1\", \"exit_code\": 0, \"duration_s\": 0}]}\n"}},
+  {"cost": {"usd": 0.01}},
+  {"say": "Done: the fake run finished."}
+]

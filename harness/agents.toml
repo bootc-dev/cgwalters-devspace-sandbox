@@ -1,0 +1,21 @@
+# The ACP agents bot-harness can run (see src/agents.rs): the command that
+# starts each one's ACP server on stdio, and how it's told the model.
+# The claude and opencode commands are pinned in npm.txt, which devspaces
+# install; agent.yml runs them once it has inference. No
+# secrets here: behind a wrapper, `env` is passed on the command line
+# (env K=V ...), which other users can see.
+
+# Claude Code, through its ACP adapter (@agentclientprotocol/claude-agent-acp).
+[claude]
+command = ["claude-agent-acp"]
+model-env = "ANTHROPIC_MODEL"
+env = { DISABLE_AUTOUPDATER = "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1" }
+
+# opencode speaks ACP natively; its model is a session config option.
+[opencode]
+command = ["opencode", "acp"]
+
+# A scripted agent with no model behind it (src/bin/fake-acp-agent.rs),
+# for runs without inference: it plays fake-agent-demo.json.
+[fake]
+command = ["fake-acp-agent", "demo"]

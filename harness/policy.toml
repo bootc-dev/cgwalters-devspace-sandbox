@@ -1,0 +1,19 @@
+# How bot-harness answers the agent's permission requests (see
+# src/policy.rs). The sandbox is the security boundary; this keeps the
+# agent from actions a task run shouldn't take, and records every
+# decision in the transcript.
+default = "allow"
+
+# Results leave through the run's artifacts, reviewed before anything is
+# pushed from outside the sandbox.
+[[rule]]
+name = "no-push"
+decision = "deny"
+kind = ["execute"]
+command = '\bgit\b.*\bpush\b'
+
+[[rule]]
+name = "writes-in-home-only"
+decision = "deny"
+kind = ["edit", "delete", "move"]
+outside = ["/home/runner-sandbox"]

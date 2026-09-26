@@ -1,0 +1,41 @@
+{
+  "schema": "bot-harness-result/v1",
+  "agent": "claude",
+  "command": [
+    "sudo",
+    "systemd-run",
+    "--quiet",
+    "--collect",
+    "--wait",
+    "--pipe",
+    "--service-type=exec",
+    "--slice=agent.slice",
+    "--uid=runner-sandbox",
+    "--gid=runner-sandbox",
+    "--working-directory=/home/runner-sandbox/work/cgwalters-devspace-sandbox",
+    "--setenv=HOME=/home/runner-sandbox",
+    "--setenv=USER=runner-sandbox",
+    "--setenv=LOGNAME=runner-sandbox",
+    "--setenv=LANG=C.UTF-8",
+    "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
+    "--setenv=ANTHROPIC_BASE_URL=http://127.0.0.1:18080",
+    "--setenv=ANTHROPIC_API_KEY=mock-no-credentials",
+    "--",
+    "env",
+    "ANTHROPIC_MODEL=claude-sonnet-4-5",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+    "DISABLE_AUTOUPDATER=1",
+    "claude-agent-acp"
+  ],
+  "result": "success",
+  "stop_reason": "end_turn",
+  "message": null,
+  "started_at": "2026-09-26T03:14:39Z",
+  "finished_at": "2026-09-26T03:14:40Z",
+  "duration_s": 0,
+  "limits": {
+    "timeout_s": 600,
+    "budget_aic": 500.0,
+    "max_tool_calls": null
+  }
+}

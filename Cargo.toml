@@ -1,3 +1,6 @@
+[workspace]
+members = ["harness"]
+
 [package]
 name = "devspace"
 version = "0.1.0"

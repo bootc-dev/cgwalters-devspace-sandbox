@@ -1162,7 +1162,14 @@ mod tests {
             );
             packages.push(name);
         }
-        assert_eq!(packages, ["opencode-ai", "@anthropic-ai/claude-code"]);
+        assert_eq!(
+            packages,
+            [
+                "opencode-ai",
+                "@anthropic-ai/claude-code",
+                "@agentclientprotocol/claude-agent-acp"
+            ]
+        );
         let renovate: serde_json::Value =
             serde_json::from_str(&fs::read_to_string("renovate.json").unwrap()).unwrap();
         assert_eq!(
