@@ -1,5 +1,7 @@
-# The development toolchain installed on every devspace before OpenSSH
-# starts, with dnf (RHEL 10 plus EPEL).
+# The development toolchain installed on every devspace, with dnf (RHEL 10
+# plus EPEL). SSH sessions have no sudo, so anything they need goes here.
+# TODO: align with what bootc-dev/actions' bootc-ubuntu-setup installs, or
+# move to a devcontainer by default, with the podman socket mounted in.
 podman buildah skopeo
 gcc gcc-c++ make pkgconf openssl-devel
 # Build dependencies shared by bootc, ostree-ext and composefs-rs

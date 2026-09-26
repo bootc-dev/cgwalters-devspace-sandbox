@@ -16,6 +16,9 @@ use xshell::{Shell, cmd};
 const REPO: &str = "bootc-dev/cgwalters-devspace-sandbox";
 const WORKFLOW: &str = "devspace.yml";
 const WORKFLOW_NAME: &str = "Development runner";
+/// The unprivileged account OpenSSH admits; the workflow's `runner` account
+/// holds the job's credentials and passwordless sudo.
+const SSH_USER: &str = "runner-sandbox";
 const WAIT: Duration = Duration::from_secs(180);
 
 #[derive(Parser, Debug)]
@@ -404,7 +407,7 @@ fn ssh_command(key: &Path, known_hosts: &Path, host: &str) -> Vec<String> {
         "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
         "IdentitiesOnly=yes".into(),
-        format!("runner@{host}"),
+        format!("{SSH_USER}@{host}"),
     ]
 }
 fn ssh_probe_command(key: &Path, known_hosts: &Path, host: &str) -> Vec<String> {
@@ -832,7 +835,7 @@ mod tests {
         let argv = ssh_command(&key, &dir.join("known hosts"), &hostname(7));
         assert!(argv.contains(&"StrictHostKeyChecking=accept-new".into()));
         assert!(argv.contains(&"IdentitiesOnly=yes".into()));
-        assert_eq!(argv.last().unwrap(), "runner@cgwalters-devspace-7");
+        assert_eq!(argv.last().unwrap(), "runner-sandbox@cgwalters-devspace-7");
         let probe = ssh_probe_command(&key, &dir.join("known hosts"), &hostname(7));
         assert!(probe.contains(&"BatchMode=yes".into()));
         assert!(probe.contains(&"ConnectTimeout=8".into()));
@@ -1097,10 +1100,18 @@ mod tests {
                 &["packages.txt | xargs sudo dnf install -y"],
             ),
             (
-                "Initialize runner configuration",
-                &["sudo -u runner -H just init"],
+                "Create and initialize the unprivileged runner-sandbox user",
+                &["sudo node scripts/setup-runner-sandbox.mjs --init Justfile"],
             ),
-            ("Prepare OpenSSH and keep the devspace available", &[]),
+            (
+                "Prepare OpenSSH and keep the devspace available",
+                &[
+                    "exec env \"${scrub[@]/#/--unset=}\" bash",
+                    "sudo systemctl restart sshd.service",
+                    &format!("AllowUsers {SSH_USER}\n"),
+                    "AuthorizedKeysFile /etc/ssh/devspace-authorized_keys",
+                ],
+            ),
         ];
         let mut previous = None;
         for (name, snippets) in expected {
