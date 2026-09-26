@@ -1111,9 +1111,14 @@ mod tests {
             }
         }
         let (_, checkout) = step("Check out devspace configuration");
-        assert_eq!(
-            checkout["uses"].as_str(),
-            Some("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683")
+        // A major version tag, which Renovate keeps current.
+        let version = checkout["uses"]
+            .as_str()
+            .and_then(|uses| uses.strip_prefix("actions/checkout@v"))
+            .unwrap();
+        assert!(
+            !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit()),
+            "{version}"
         );
         assert_eq!(
             checkout["with"]["persist-credentials"].as_bool(),
