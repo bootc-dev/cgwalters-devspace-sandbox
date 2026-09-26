@@ -1013,6 +1013,33 @@ mod tests {
         assert!(is_session_title(&title, "session-a"));
     }
     #[test]
+    fn agent_workflow_sizes_match() {
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(".github/workflows/agent.yml").unwrap())
+                .unwrap();
+        let expression = find_yaml_key(&workflow, "runs-on")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        let mapping = expression
+            .split("fromJSON('")
+            .nth(1)
+            .and_then(|rest| rest.split("')[inputs.cores]").next())
+            .unwrap();
+        let mapping: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(mapping).unwrap();
+        assert_eq!(mapping, runner_sizes().unwrap());
+        let cores = find_yaml_key(find_yaml_key(&workflow, "inputs").unwrap(), "cores").unwrap();
+        let options: std::collections::BTreeSet<_> = find_yaml_key(cores, "options")
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(options, mapping.keys().cloned().collect());
+    }
+    #[test]
     fn durations_match_workflow() {
         let workflow = fs::read_to_string(".github/workflows/devspace.yml").unwrap();
         let workflow_yaml: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();

@@ -106,6 +106,51 @@ which Renovate keeps current via the shared bootc-dev configuration. The
 GitHub CLI, which the bot's tools call for every GitHub operation, comes from
 EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
 
+## Agent runs
+
+`.github/workflows/agent.yml` runs an agent on one task, unattended, as the
+same unprivileged `runner-sandbox` user, in a login session of its own, which
+`scripts/agent-lib.mjs` kills when the run ends. The job has no `id-token`
+permission and no secrets. `scripts/agent-isolation-check.mjs` verifies before
+every run that
+the agent can't use sudo, read the job's environment or files, or reach the
+cloud metadata service, also from a container on the host network. Its
+network access is otherwise open for now; the plan is a proxy that sees
+requests and allows writes (`POST` and the like) only to known endpoints.
+
+Devspaces and agent runs are for public repositories only: their logs and
+transcripts are public. `scripts/public-repo.mjs` refuses a target that
+GitHub doesn't confirm is public, failing closed, before anything is cloned
+and again before anything is uploaded (`scripts/check-uploads.mjs`).
+
+The agent is driven by `bot-harness` (`harness/`), a client of the
+[Agent Client Protocol](https://agentclientprotocol.com) on the
+`agent-client-protocol` crate, so no agent is hardcoded: it starts any agent
+in `harness/agents.toml` (Claude Code through its ACP adapter, opencode, or
+the scripted `fake-acp-agent`) as `runner-sandbox`. It records the protocol
+stream, both directions, as `acp.jsonl`, answers the agent's permission
+requests from `harness/policy.toml` (recording each decision and its rule),
+and cancels the session at the timeout or when the agent goes over budget:
+the cost it reports, or a number of tool calls. `bot-harness summary` then
+writes `summary.json` and the step summary from the recording, the same way
+for every agent.
+
+The condensed transcript streams into the job log in an `agent (condensed)`
+group, and the `agent-run` (90 days) and `agent-transcript` (30 days)
+artifacts hold the rest, redacted by `agent/redact.mjs` and checked for
+anything secret-shaped before upload. The files and the dispatch inputs
+follow the
+[agent runs contract](https://github.com/cgwalters-bot/homegit/blob/main/docs/devspace-agent-runs.md),
+and homegit's `bot-runs` dispatches and reads the runs.
+
+There is no inference yet, so the only agent a run offers is `fake`, which
+plays `harness/fake-agent-demo.json`: it uses the tools, runs into the
+sandbox (sudo, the metadata service) and the policy (`git push`), and prints
+a token-shaped string for the redaction pass to catch, all without
+credentials. The harness lives here, next to `agent.yml`, until the
+[task harness design](https://gist.github.com/cgwalters-bot/290d1fbd3545e430f7717948caab260f)
+settles where tasks and their tools belong.
+
 ## TODO / roadmap
 
 - Move the `runner-sandbox` setup into
@@ -113,5 +158,9 @@ EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
   action, on by default, so CI jobs get the same unprivileged user.
 - Align `packages.txt` with what `bootc-ubuntu-setup` installs, or switch to a
   devcontainer with the podman socket mounted in.
+- Filter agent runs' egress, which is open for now: an L7 proxy that allows
+  reads but writes (`POST` and the like) only to listed endpoints, as
+  OpenShell's policies do, possibly with a shared denylist
+  ([research notes](https://gist.github.com/cgwalters-bot/30ef6cce070d78f60c55284d4c6e6193)).
 - Later, support launching an agent that can work autonomously and push changes
   with safe, scoped credentials, while preserving interactive access.

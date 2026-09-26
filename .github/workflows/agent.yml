@@ -1,0 +1,174 @@
+name: Agent run
+run-name: "agent ${{ inputs.item }} ${{ inputs.repo }}"
+
+# One agent working one board item as the unprivileged runner-sandbox user,
+# driven over the Agent Client Protocol by bot-harness (harness/), with its
+# condensed transcript in this job's log and the full one in artifacts.
+# The inputs, artifacts and summary.json follow docs/devspace-agent-runs.md
+# in cgwalters-bot/homegit; bot-runs there dispatches and reads these runs.
+# There is no inference yet, so the only agent is the scripted fake one
+# (harness/src/bin/fake-acp-agent.rs), and no credentials are involved.
+on:
+  workflow_dispatch:
+    inputs:
+      item:
+        description: "Board item id (PVTI_...)"
+        type: string
+        required: true
+      repo:
+        description: "Target repository, OWNER/REPO"
+        type: string
+        required: true
+      base:
+        description: "Base ref of the target repository"
+        type: string
+        default: main
+      # An entry in harness/agents.toml. claude and opencode join once
+      # there is inference (plan step 4).
+      agent:
+        description: "Agent"
+        type: choice
+        options: ["fake"]
+        default: fake
+      model:
+        description: "Model name (empty: the agent's default)"
+        type: string
+        default: ""
+      cores:
+        description: "Runner CPU cores"
+        type: choice
+        options: ["4", "16", "64"]
+        default: "4"
+      timeout:
+        description: "Minutes the agent may run (at most 330)"
+        type: string
+        default: "120"
+      budget:
+        description: "Spend cap in AIC (1 AIC = $0.01)"
+        type: string
+        default: "500"
+      workflow:
+        description: "What the item wants"
+        type: choice
+        options: ["branch", "analysis"]
+        default: branch
+      brief:
+        description: "The task text (public: no private data)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-${{ inputs.item }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    name: Agent
+    runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
+    timeout-minutes: 360
+    steps:
+      - name: Check the inputs
+        shell: bash
+        env:
+          TIMEOUT: ${{ inputs.timeout }}
+          BUDGET: ${{ inputs.budget }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]{0,2}$ ]] || (( TIMEOUT > 330 )); then
+            echo "::error::timeout must be 1-330 minutes, not '$TIMEOUT'"
+            exit 1
+          fi
+          if ! [[ "$BUDGET" =~ ^(0|[1-9][0-9]{0,5})(\.[0-9]+)?$ ]]; then
+            echo "::error::budget must be a number of AIC, not '$BUDGET'"
+            exit 1
+          fi
+
+      - name: Check out agent configuration
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y git curl zstd podman nodejs cargo
+
+      # Logs and transcripts are public, so private repositories are refused
+      # (as they are by bot-runs dispatch), before anything is cloned.
+      - name: Check that the target repository is public
+        shell: bash
+        env:
+          REPO: ${{ inputs.repo }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/public-repo.mjs "$REPO"
+
+      # bot-harness runs as runner, from the checkout. The agent runs as
+      # runner-sandbox, which can't read runner's home, so the fake agent
+      # goes where its PATH finds it.
+      - name: Build bot-harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p bot-harness
+          sudo install -m 0755 target/release/fake-acp-agent /usr/local/bin/
+
+      - name: Create the unprivileged runner-sandbox user
+        shell: bash
+        run: sudo node scripts/setup-runner-sandbox.mjs
+
+      - name: Check the runner-sandbox user's isolation
+        shell: bash
+        run: node scripts/agent-isolation-check.mjs https://github.com/
+
+      - name: Run the agent
+        id: agent
+        shell: bash
+        timeout-minutes: 340
+        env:
+          ITEM: ${{ inputs.item }}
+          REPO: ${{ inputs.repo }}
+          BASE: ${{ inputs.base }}
+          AGENT: ${{ inputs.agent }}
+          MODEL: ${{ inputs.model }}
+          CORES: ${{ inputs.cores }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout }}
+          BUDGET: ${{ inputs.budget }}
+          WORKFLOW: ${{ inputs.workflow }}
+          BRIEF: ${{ inputs.brief }}
+          OUT: ${{ runner.temp }}/agent
+        run: node agent/run.mjs
+
+      # Nothing is uploaded unless this passes, even when the agent failed:
+      # the target is still public, and nothing secret-shaped is left.
+      - name: Check the uploads
+        id: uploads
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPO: ${{ inputs.repo }}
+          AGENT: ${{ inputs.agent }}
+          GH_TOKEN: ${{ github.token }}
+          OUT: ${{ runner.temp }}/agent
+        run: node scripts/check-uploads.mjs "$OUT" "$REPO"
+
+      - name: Upload the run summary
+        if: ${{ !cancelled() && steps.uploads.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-run
+          path: ${{ runner.temp }}/agent/run/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload the transcript
+        if: ${{ !cancelled() && steps.uploads.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-transcript
+          path: ${{ runner.temp }}/agent/transcript.tar.zst
+          retention-days: 30
+          if-no-files-found: error
