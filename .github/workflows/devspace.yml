@@ -59,7 +59,7 @@ jobs:
           fi
 
       - name: Connect to the tailnet
-        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8
+        uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
@@ -75,7 +75,7 @@ jobs:
           id runner
 
       - name: Check out devspace configuration
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
