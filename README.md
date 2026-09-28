@@ -110,13 +110,14 @@ EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
 
 `.github/workflows/agent.yml` runs an agent on one task, unattended, as the
 same unprivileged `runner-sandbox` user, in a login session of its own, which
-`scripts/agent-lib.mjs` kills when the run ends. The job has no `id-token`
-permission and no secrets. `scripts/agent-isolation-check.mjs` verifies before
-every run that
+`scripts/agent-lib.mjs` kills when the run ends. The job has no secrets; its
+`id-token` permission is only for the tailnet login of runs that need inference
+(see below). `scripts/agent-isolation-check.mjs` verifies before every run that
 the agent can't use sudo, read the job's environment or files, or reach the
 cloud metadata service, also from a container on the host network. Its
-network access is otherwise open for now; the plan is a proxy that sees
-requests and allows writes (`POST` and the like) only to known endpoints.
+network access is otherwise open for now, except the tailnet; the plan is a
+proxy that sees requests and allows writes (`POST` and the like) only to
+known endpoints.
 
 Devspaces and agent runs are for public repositories only: their logs and
 transcripts are public. `scripts/public-repo.mjs` refuses a target that
@@ -143,11 +144,36 @@ follow the
 [agent runs contract](https://github.com/cgwalters-bot/homegit/blob/main/docs/devspace-agent-runs.md),
 and homegit's `bot-runs` dispatches and reads the runs.
 
-There is no inference yet, so the only agent a run offers is `fake`, which
-plays `harness/fake-agent-demo.json`: it uses the tools, runs into the
-sandbox (sudo, the metadata service) and the policy (`git push`), and prints
-a token-shaped string for the redaction pass to catch, all without
-credentials. The harness lives here, next to `agent.yml`, until the
+A run offers two agents. `fake` needs no inference: it plays
+`harness/fake-agent-demo.json`, using the tools, running into the sandbox
+(sudo, the metadata service) and the policy (`git push`), and printing a
+token-shaped string for the redaction pass to catch.
+
+`opencode` gets its inference from the
+[praxis credential broker](https://github.com/cgwalters-bot/praxis-credential-broker)
+on the tailnet, at the `PRAXIS_BASE_URL` repository variable
+(`http://<tailnet IPv4>:<port>/v1`). The broker holds the subscription
+login and runs without client authentication, leaving access to the
+tailnet ACL, so nothing on the runner holds a model credential:
+`agent/opencode.json` makes the broker opencode's only provider, with a
+placeholder key, and `harness/agents.toml` keeps opencode from loading the
+target repository's own configuration (which could bring other providers
+or plugins back). That also means every node with the runners' tag can
+spend the subscription.
+
+For these runs the job joins the tailnet as devspaces do, after the same
+hardening (sshd stopped, Cockpit off), but without MagicDNS
+(`--accept-dns=false`), which would name every node. The tailnet ACL for the
+runners' tag is what should limit them to the broker's port; today it
+allows more. Underneath it, as defence in depth, `setup-runner-sandbox.mjs
+--tailnet-allow` rejects everything `runner-sandbox`'s uids send out of the
+Tailscale interface or to a tailnet address (quad-100 and the runner's own
+included), except to the broker's address and port, and tailscaled's
+LocalAPI is closed to it. There is no per-token
+cost, so the `budget` input doesn't apply (`aic_pricing: subscription`) and
+the timeout bounds the run, until the broker counts tokens itself.
+
+The harness lives here, next to `agent.yml`, until the
 [task harness design](https://gist.github.com/cgwalters-bot/290d1fbd3545e430f7717948caab260f)
 settles where tasks and their tools belong.
 

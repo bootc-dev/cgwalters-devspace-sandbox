@@ -6,8 +6,11 @@ run-name: "agent ${{ inputs.item }} ${{ inputs.repo }}"
 # condensed transcript in this job's log and the full one in artifacts.
 # The inputs, artifacts and summary.json follow docs/devspace-agent-runs.md
 # in cgwalters-bot/homegit; bot-runs there dispatches and reads these runs.
-# There is no inference yet, so the only agent is the scripted fake one
-# (harness/src/bin/fake-acp-agent.rs), and no credentials are involved.
+# The agents are the scripted fake one (harness/src/bin/fake-acp-agent.rs),
+# which needs no inference, and opencode, which gets it from the praxis
+# credential broker on the tailnet (vars.PRAXIS_BASE_URL). The broker holds
+# the subscription login, so no model credential reaches this runner; the
+# only credential the job uses is its OIDC token, for the tailnet login.
 on:
   workflow_dispatch:
     inputs:
@@ -23,12 +26,12 @@ on:
         description: "Base ref of the target repository"
         type: string
         default: main
-      # An entry in harness/agents.toml. claude and opencode join once
-      # there is inference (plan step 4).
+      # An entry in harness/agents.toml. claude joins once the broker
+      # can hold its credential too.
       agent:
         description: "Agent"
         type: choice
-        options: ["fake"]
+        options: ["fake", "opencode"]
         default: fake
       model:
         description: "Model name (empty: the agent's default)"
@@ -59,6 +62,10 @@ on:
 
 permissions:
   contents: read
+  # Only for the tailnet login, as in devspace.yml: the OAuth client trusts
+  # this job's OIDC tokens. runner-sandbox can't read the step
+  # environments that hold the request token (the isolation check).
+  id-token: write
 
 concurrency:
   group: agent-${{ inputs.item }}
@@ -69,12 +76,17 @@ jobs:
     name: Agent
     runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
     timeout-minutes: 360
+    env:
+      # The broker's URL on the tailnet, http://<tailnet IPv4>:<port>/v1.
+      # Not a secret; unused by the fake agent.
+      PRAXIS_BASE_URL: ${{ inputs.agent != 'fake' && vars.PRAXIS_BASE_URL || '' }}
     steps:
       - name: Check the inputs
         shell: bash
         env:
           TIMEOUT: ${{ inputs.timeout }}
           BUDGET: ${{ inputs.budget }}
+          AGENT: ${{ inputs.agent }}
         run: |
           set -euo pipefail
           if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]{0,2}$ ]] || (( TIMEOUT > 330 )); then
@@ -83,6 +95,10 @@ jobs:
           fi
           if ! [[ "$BUDGET" =~ ^(0|[1-9][0-9]{0,5})(\.[0-9]+)?$ ]]; then
             echo "::error::budget must be a number of AIC, not '$BUDGET'"
+            exit 1
+          fi
+          if [[ "$AGENT" != fake && -z "$PRAXIS_BASE_URL" ]]; then
+            echo "::error::agent $AGENT needs the PRAXIS_BASE_URL repository variable (the praxis broker on the tailnet)"
             exit 1
           fi
 
@@ -95,7 +111,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo dnf install -y git curl zstd podman nodejs cargo
+          sudo dnf install -y git curl zstd podman nodejs npm cargo
+
+      - name: Install opencode
+        if: ${{ inputs.agent == 'opencode' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -E '^opencode-ai@' npm.txt | xargs sudo npm install -g --no-audit --no-fund
+          opencode --version
+
+      # As in devspace.yml: nothing may listen on the tailnet once the
+      # runner joins it, and the action installs into /usr/local/bin, which
+      # isn't in sudo's PATH on RHEL.
+      - name: Install Tailscale networking prerequisite
+        if: ${{ inputs.agent != 'fake' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y iptables
+          sudo ln -sfn /usr/local/bin/tailscale /usr/bin/tailscale
+          sudo ln -sfn /usr/local/bin/tailscaled /usr/bin/tailscaled
+          # Cockpit listens on all addresses; nothing here uses it or sshd.
+          sudo systemctl disable --now cockpit.socket 2>/dev/null || true
+          sudo systemctl stop sshd.service
+          if sudo systemctl cat sshd.socket >/dev/null 2>&1; then
+            sudo systemctl stop sshd.socket
+          fi
+          if sudo systemctl is-active --quiet sshd.service || sudo systemctl is-active --quiet sshd.socket; then
+            printf '%s\n' 'refusing to join the tailnet while an SSH listener is active' >&2
+            exit 1
+          fi
+
+      # Only the praxis broker is used there: setup-runner-sandbox.mjs keeps
+      # runner-sandbox off the rest of the tailnet.
+      - name: Connect to the tailnet
+        if: ${{ inputs.agent != 'fake' }}
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:bootc-dev-sandbox
+          hostname: cgwalters-agent-${{ github.run_id }}
+          # MagicDNS answers PTR queries for every node; the broker is
+          # reached by address, and everything else by the runner's DNS.
+          args: --accept-dns=false
+
+      # tailscaled's LocalAPI socket is 0666 and would dial the tailnet for
+      # anyone; setup-runner-sandbox.mjs does this too, but don't leave it
+      # open in between.
+      - name: Close tailscaled's LocalAPI to other users
+        if: ${{ inputs.agent != 'fake' }}
+        shell: bash
+        run: sudo chmod 0700 /var/run/tailscale
 
       # Logs and transcripts are public, so private repositories are refused
       # (as they are by bot-runs dispatch), before anything is cloned.
@@ -118,11 +186,11 @@ jobs:
 
       - name: Create the unprivileged runner-sandbox user
         shell: bash
-        run: sudo node scripts/setup-runner-sandbox.mjs
+        run: sudo node scripts/setup-runner-sandbox.mjs ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"}
 
       - name: Check the runner-sandbox user's isolation
         shell: bash
-        run: node scripts/agent-isolation-check.mjs https://github.com/
+        run: node scripts/agent-isolation-check.mjs ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"} https://github.com/
 
       - name: Run the agent
         id: agent

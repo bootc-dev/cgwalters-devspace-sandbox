@@ -14,11 +14,12 @@
 // protocol stream (acp.jsonl) as the transcript, and writes summary.json.
 //
 // Environment (from the workflow): ITEM REPO BASE AGENT MODEL CORES
-// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, and the GITHUB_* run
-// variables. Everything lands in OUT: run/ (the agent-run artifact) and
-// transcript.tar.zst (agent-transcript).
+// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, PRAXIS_BASE_URL for agents
+// that need inference, and the GITHUB_* run variables. Everything lands in
+// OUT: run/ (the agent-run artifact) and transcript.tar.zst
+// (agent-transcript).
 import { spawn } from "node:child_process";
-import { appendFileSync, copyFileSync, createWriteStream, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -33,8 +34,17 @@ const HARNESS_DIR = join(ROOT, "harness");
 const SOCKET_STDIO = join(ROOT, "scripts/socket-stdio.mjs");
 // The files bot-harness run writes, which go into the transcript.
 const HARNESS_FILES = ["acp.jsonl", "agent-stderr.log", "harness.json"];
-// The agents that run without inference, which is all there is for now.
-const AGENTS = ["fake"];
+// The agents that need inference. They get it from the praxis credential
+// broker on the tailnet (PRAXIS_BASE_URL), which holds the subscription
+// login: nothing on this runner has a model credential.
+const INFERENCE_AGENTS = ["opencode"];
+const AGENTS = ["fake", ...INFERENCE_AGENTS];
+// opencode's configuration: the broker as its only provider, with a
+// placeholder key (the broker strips it). The base URL is filled in here.
+const OPENCODE_CONFIG = join(ROOT, "agent/opencode.json");
+// The repository's instructions for agents. opencode doesn't load them
+// itself here (OPENCODE_DISABLE_PROJECT_CONFIG, harness/agents.toml).
+const INSTRUCTION_FILES = { opencode: ["AGENTS.md", "CLAUDE.md"] };
 // Time bot-harness gets past the agent's timeout to cancel it and finish.
 const HARNESS_GRACE_S = 90;
 const LOG_GROUP = "agent (condensed)";
@@ -43,8 +53,10 @@ const MAX_OUTCOME_BYTES = 65536;
 const EXIT_TIMEOUT = 124;
 // Egress is open, so nothing is denied; summary.json keeps the field.
 const EGRESS_DENIED = [];
-// No inference is billed: the fake agent reports a made-up cost.
-const AIC_PRICING = "mock";
+// How a run's AIC is priced: the fake agent reports a made-up cost, and
+// subscription inference through the broker has none per token (so only
+// the timeout bounds it, until the broker counts tokens).
+const AIC_PRICING = { fake: "mock", opencode: "subscription" };
 // The values of whatever tokens this step can see, for redaction.
 const TOKEN_VARS = ["ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN"];
 const REQUIRED = ["ITEM", "REPO", "BASE", "AGENT", "CORES", "TIMEOUT_MINUTES", "BUDGET", "WORKFLOW", "BRIEF", "OUT",
@@ -67,16 +79,34 @@ function validate() {
     fail("bad base ref (letters, digits and _ . / - only)");
   }
   if (!AGENTS.includes(env.AGENT)) {
-    fail(`agent '${env.AGENT}' needs inference, which agent.yml doesn't provide yet (only ${AGENTS.join(", ")})`);
+    fail(`no agent '${env.AGENT}' (only ${AGENTS.join(", ")})`);
+  }
+  if (INFERENCE_AGENTS.includes(env.AGENT) && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(env.PRAXIS_BASE_URL ?? "")) {
+    fail(`agent '${env.AGENT}' needs PRAXIS_BASE_URL, the praxis broker's http(s) URL (the repository variable)`);
   }
   if (!existsSync(HARNESS_BIN)) fail(`${HARNESS_BIN} is missing (cargo build --release -p bot-harness)`);
+}
+
+// Points the agent at the broker, in runner-sandbox's own configuration.
+function configureInference() {
+  if (env.AGENT !== "opencode") return;
+  const config = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8"));
+  config.provider.praxis.options.baseURL = env.PRAXIS_BASE_URL;
+  const write = asAgent(["sh", "-c", 'mkdir -p "$HOME/.config/opencode" && cat > "$HOME/.config/opencode/opencode.json"'],
+    { input: `${JSON.stringify(config, null, 2)}\n` });
+  if (write.status !== 0) fail("writing runner-sandbox's opencode configuration failed");
 }
 
 // Runs the agent through bot-harness, which prints the condensed
 // transcript: redacted here, to the log and CONDENSED. Returns its exit
 // status.
 async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, promptFile }) {
-  writeFileSync(promptFile, `${env.BRIEF}\n`);
+  // Checked as the agent: the checkout is runner-sandbox's.
+  const instructions = (INSTRUCTION_FILES[env.AGENT] ?? [])
+    .filter((name) => asAgent(["test", "-f", `${workdir}/${name}`]).status === 0);
+  const preamble = instructions.length === 0 ? ""
+    : `Before starting, read the repository's instructions for agents: ${instructions.join(" and ")}.\n\n`;
+  writeFileSync(promptFile, `${preamble}${env.BRIEF}\n`);
   // The agent runs as runner-sandbox, in a session of its own; bot-harness
   // appends its command to this. bot-harness gives it pipes, which run0
   // can't hand to PID 1 from this service (see socket-stdio.mjs).
@@ -142,6 +172,7 @@ async function main() {
   console.log(`head: ${oneLine(asAgent(["git", "-C", workdir, "log", "-1", "--format=%h %s"]).stdout.toString().trim())}`);
   console.log("::endgroup::");
 
+  configureInference();
   const started = new Date();
   // The condensed lines never span lines and start with bot-harness's own
   // markers, so none can be read as a workflow command.
@@ -177,7 +208,7 @@ async function main() {
     cores: Number(env.CORES), started_at: started.toISOString().replace(/\.\d+Z$/, "Z"),
     finished_at: finished.toISOString().replace(/\.\d+Z$/, "Z"),
     duration_s: Math.round((finished - started) / 1000), exit_code: exitCode, aic_budget: Number(env.BUDGET),
-    aic_pricing: AIC_PRICING, files, egress_denied: EGRESS_DENIED, redactions: redact.count,
+    aic_pricing: AIC_PRICING[env.AGENT], files, egress_denied: EGRESS_DENIED, redactions: redact.count,
   };
   const metaFile = join(work, "meta.json");
   writeFileSync(metaFile, JSON.stringify(meta));

@@ -1,7 +1,8 @@
 # The ACP agents bot-harness can run (see src/agents.rs): the command that
 # starts each one's ACP server on stdio, and how it's told the model.
 # The claude and opencode commands are pinned in npm.txt, which devspaces
-# install; agent.yml runs them once it has inference. No
+# install; agent.yml runs opencode, with inference from the praxis broker
+# (agent/opencode.json), and claude once the broker can serve it. No
 # secrets here: behind a wrapper, `env` is passed on the command line
 # (env K=V ...), which other users can see.
 
@@ -11,9 +12,19 @@ command = ["claude-agent-acp"]
 model-env = "ANTHROPIC_MODEL"
 env = { DISABLE_AUTOUPDATER = "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1" }
 
-# opencode speaks ACP natively; its model is a session config option.
+# opencode speaks ACP natively; its model is a session config option. Its
+# providers come only from the global configuration run.mjs writes: not
+# from the target repository's opencode.json or .opencode/ (which could
+# add providers or plugins), nor fetched from models.dev. The same switch
+# also stops opencode loading the repository's AGENTS.md and CLAUDE.md as
+# instructions, so run.mjs points the prompt at them instead. The
+# repository's skills (.claude/skills, .agents/skills) still load: like
+# AGENTS.md they are only text for the model, and
+# OPENCODE_DISABLE_EXTERNAL_SKILLS would drop the project's own guidance
+# without adding a boundary.
 [opencode]
 command = ["opencode", "acp"]
+env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1", OPENCODE_DISABLE_MODELS_FETCH = "1" }
 
 # A scripted agent with no model behind it (src/bin/fake-acp-agent.rs),
 # for runs without inference: it plays fake-agent-demo.json.
