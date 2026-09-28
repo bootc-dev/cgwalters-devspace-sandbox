@@ -3,12 +3,14 @@
 // running things the way the agent step does (agentCommand): no sudo, no
 // access to the runner's processes or files, no cloud metadata service,
 // also not from a rootless container, and no tailscaled LocalAPI. Its
-// network is otherwise open.
+// network is otherwise open, except the tailnet: with --tailnet-allow (as
+// given to setup-runner-sandbox.mjs), it reaches only that endpoint there.
 // Exits nonzero if any check fails.
-//   agent-isolation-check.mjs CONTROL_URL
+//   agent-isolation-check.mjs [--tailnet-allow URL] CONTROL_URL
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { parseArgs } from "node:util";
 import { asAgent } from "./agent-lib.mjs";
 import { SANDBOX_HOME, SANDBOX_USER, fail } from "./runner-sandbox.mjs";
 
@@ -22,8 +24,50 @@ const CONTAINER_UID = "1000";
 const TAILSCALE_SOCKET = "/var/run/tailscale/tailscaled.sock";
 const LOCALAPI_STATUS = "http://local-tailscaled.sock/localapi/v0/status";
 
-const [control] = process.argv.slice(2);
-if (!control) fail("usage: agent-isolation-check.mjs CONTROL_URL");
+// Another port on the broker's host, which the tailnet ACL may allow but
+// runner-sandbox must not reach: SSH, which most hosts listen on.
+const OTHER_TAILNET_PORT = 22;
+
+const { values, positionals } = parseArgs({ options: { "tailnet-allow": { type: "string" } }, allowPositionals: true });
+const [control] = positionals;
+if (!control || positionals.length > 1) fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] CONTROL_URL");
+const tailnetAllow = values["tailnet-allow"];
+
+// Quad-100, tailscaled's own address: MagicDNS (which answers PTR queries
+// for every node) and its web ports.
+const QUAD100 = ["100.100.100.100", "fd7a:115c:a1e0::53"];
+const QUAD100_PORTS = [53, 80, 8080];
+
+// argv that opens a plain TCP connection, whatever the service speaks.
+const tcpProbe = (addr, port) => ["timeout", "10", "bash", "-c", 'exec 3<>"/dev/tcp/$1/$2"', "probe", addr, String(port)];
+
+// tailscaled's status (as root), or {}.
+function tailscaleStatus() {
+  const r = spawnSync("sudo", ["tailscale", "status", "--json"], { encoding: "utf8", maxBuffer: 1 << 26 });
+  try {
+    return r.status === 0 ? JSON.parse(r.stdout) : {};
+  } catch {
+    return {};
+  }
+}
+
+// The tailnet IPv6 address of the peer with IPv4 address ADDR, or null.
+function tailnetV6(status, addr) {
+  const ips = Object.values(status.Peer ?? {}).map((p) => p.TailscaleIPs ?? []).find((a) => a.includes(addr)) ?? [];
+  return ips.find((ip) => ip.includes(":")) ?? null;
+}
+
+// [address, port] of this node's own peerapi, which is reached over lo.
+function selfPeerapi(status) {
+  return (status.Self?.PeerAPIURL ?? []).flatMap((u) => {
+    try {
+      const { hostname, port } = new URL(u);
+      return [[hostname.replace(/^\[|\]$/g, ""), Number(port)]];
+    } catch {
+      return [];
+    }
+  });
+}
 
 // A process of runner's whose environment holds a value only it has, as
 // a stand-in for the tokens in real step environments.
@@ -85,6 +129,47 @@ if (spawnSync("sudo", ["test", "-S", TAILSCALE_SOCKET]).status === 0) {
     succeeds(["curl", "-sS", "-m", "10", "-o", "/dev/null", "--unix-socket", TAILSCALE_SOCKET, LOCALAPI_STATUS]));
 } else {
   console.log("ok: no tailscaled on this runner, so no LocalAPI to reach");
+}
+
+// The tailnet filter: the broker is reachable, and nothing else there, over
+// IPv4 or IPv6, quad-100 (MagicDNS included) or this node's own address,
+// whether dialed directly or through tailscaled. Where runner reaches a
+// target, that's shown as a control; once the ACL is narrowed to the
+// broker's port, only this node's own addresses have one.
+if (tailnetAllow) {
+  const url = new URL(tailnetAllow);
+  const host = url.hostname;
+  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  // Any HTTP response will do: the point is the connection.
+  expect("succeed", `${SANDBOX_USER} reaches ${tailnetAllow} on the tailnet`, succeeds(curl([tailnetAllow])));
+  expect("succeed", `a container as subordinate uid ${CONTAINER_UID} reaches ${tailnetAllow} on the tailnet`,
+    succeeds(inContainer(curl([tailnetAllow]))));
+  const status = tailscaleStatus();
+  const hostV6 = tailnetV6(status, host);
+  const targets = [
+    [host, OTHER_TAILNET_PORT],
+    ...(hostV6 ? [[hostV6, port], [hostV6, OTHER_TAILNET_PORT]] : []),
+    ...QUAD100.flatMap((a) => QUAD100_PORTS.map((p) => [a, p])),
+    ...selfPeerapi(status),
+  ];
+  let controlled = 0;
+  for (const [addr, p] of targets) {
+    const target = addr.includes(":") ? `[${addr}]:${p}` : `${addr}:${p}`;
+    const probe = tcpProbe(addr, p);
+    if (spawnSync(probe[0], probe.slice(1), { stdio: "ignore" }).status === 0) {
+      controlled++;
+      expect("succeed", `runner reaches ${target} (control)`, true);
+    } else {
+      console.log(`note: runner can't reach ${target} either (no control)`);
+    }
+    expect("fail", `${SANDBOX_USER} can't reach ${target}`, succeeds(probe));
+    expect("fail", `a container as subordinate uid ${CONTAINER_UID} can't reach ${target}`, succeeds(inContainer(probe)));
+  }
+  if (controlled === 0) {
+    console.log("note: runner reaches none of these either, so the tailnet ACL already refuses them");
+  }
+  expect("fail", `${SANDBOX_USER} can't dial ${host}:${OTHER_TAILNET_PORT} through tailscaled (tailscale nc)`,
+    succeeds(["timeout", "10", "tailscale", "nc", host, String(OTHER_TAILNET_PORT)]));
 }
 
 decoy.kill();

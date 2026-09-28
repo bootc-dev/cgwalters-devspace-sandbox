@@ -9,14 +9,21 @@
 // What else it needs is kept to real exposures of this runner image, which
 // is built with umask 000.
 //
-//   setup-runner-sandbox.mjs [--init JUSTFILE]
+//   setup-runner-sandbox.mjs [--init JUSTFILE] [--tailnet-allow URL]...
 //
 // With --init, it then runs JUSTFILE's init recipe as runner-sandbox, in
 // its home directory (devspace.yml: the bot's dotfiles).
+// With --tailnet-allow, runner-sandbox's uids reach the tailnet only at
+// each URL's address and port (agent.yml: the inference broker); not
+// MagicDNS either, which would name every node, so the host's resolver must
+// be off the tailnet (agent.yml: --accept-dns=false). That's defence in
+// depth under the tailnet ACL for the runner's tag, which is the real
+// control and today is broader.
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isIPv4 } from "node:net";
 import { parseArgs } from "node:util";
 import { SANDBOX_HOME, SANDBOX_USER, run, sandboxCommand } from "./runner-sandbox.mjs";
 
@@ -54,6 +61,60 @@ const POLKIT_DENY = `${POLKIT_RULES_DIR}/00-runner-sandbox.rules`;
 // sees the whole tailnet. Only root needs it. tailscaled leaves an existing
 // directory's mode alone when it restarts.
 const TAILSCALE_RUN_DIR = "/var/run/tailscale";
+// Tailscale's address ranges and its interface. The filter matches both:
+// the interface because with --accept-routes, which the Tailscale action
+// passes, subnet routes send other addresses there too, and the ranges
+// because the node's own tailnet address (tailscaled's peerapi) is reached
+// over lo.
+const TAILNET_V4 = "100.64.0.0/10";
+const TAILNET_V6 = "fd7a:115c:a1e0::/48";
+const TAILSCALE_IF = "tailscale0";
+const DEFAULT_PORTS = { "http:": 80, "https:": 443 };
+
+// The "ADDRESS . PORT" nftables element for a tailnet URL, such as
+// http://100.101.102.103:18080/v1. Only IPv4 literals: nftables matches
+// addresses, and a name could resolve elsewhere later.
+function tailnetEndpoint(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error(`--tailnet-allow: '${url}' is not a URL`);
+  }
+  const port = u.port ? Number(u.port) : DEFAULT_PORTS[u.protocol];
+  if (!port) throw new Error(`--tailnet-allow: '${url}' is not an http or https URL`);
+  const [a, b] = u.hostname.split(".").map(Number);
+  if (!isIPv4(u.hostname) || a !== 100 || b < 64 || b > 127) {
+    throw new Error(`--tailnet-allow: '${u.hostname}' is not a tailnet IPv4 address (${TAILNET_V4})`);
+  }
+  return `${u.hostname} . ${port}`;
+}
+
+// The output rules for runner-sandbox's uids: no metadata service and,
+// with ALLOWED endpoints, nothing out of the Tailscale interface or to a
+// tailnet address (quad-100 and this node's own included) but those. Rejected rather than dropped, so a blocked
+// connection fails at once. This is defence in depth: the tailnet ACL for
+// the runner's tag is the real control, and connections tailscaled makes
+// itself (its LocalAPI, closed to other users) aren't runner-sandbox's.
+function sandboxRules(uids, allowed) {
+  const tailnet = allowed.length === 0 ? "" : `
+  set tailnet_allowed { type ipv4_addr . inet_service; elements = { ${allowed.join(", ")} } }`;
+  const tailnetRules = allowed.length === 0 ? "" : `
+    meta skuid @sandbox_uids ip daddr . tcp dport @tailnet_allowed accept
+    meta skuid @sandbox_uids oifname "${TAILSCALE_IF}" counter reject
+    meta skuid @sandbox_uids ip daddr ${TAILNET_V4} counter reject
+    meta skuid @sandbox_uids ip6 daddr ${TAILNET_V6} counter reject`;
+  return `table inet ${NFT_TABLE}
+delete table inet ${NFT_TABLE}
+table inet ${NFT_TABLE} {
+  set sandbox_uids { type uid; flags interval; elements = { ${uids.join(", ")} } }${tailnet}
+  chain output {
+    type filter hook output priority 0; policy accept;
+    meta skuid @sandbox_uids ip daddr ${METADATA_ADDRESS} counter reject${tailnetRules}
+  }
+}
+`;
+}
 
 // Loads an nftables ruleset, from a file.
 function nftApply(ruleset) {
@@ -138,7 +199,10 @@ function init(justfile) {
 }
 
 function main() {
-  const { values } = parseArgs({ options: { init: { type: "string" } } });
+  const { values } = parseArgs({
+    options: { init: { type: "string" }, "tailnet-allow": { type: "string", multiple: true, default: [] } },
+  });
+  const allowed = values["tailnet-allow"].map(tailnetEndpoint);
   if (process.getuid() !== 0) {
     throw new Error("must run as root");
   }
@@ -169,16 +233,7 @@ function main() {
   writeFileSync("/proc/sys/kernel/yama/ptrace_scope", "1\n");
   // Nothing runner-sandbox does needs the cloud metadata service; its
   // rootless containers run as its subordinate uids.
-  nftApply(`table inet ${NFT_TABLE}
-delete table inet ${NFT_TABLE}
-table inet ${NFT_TABLE} {
-  set sandbox_uids { type uid; flags interval; elements = { ${[uid, ...subuids].join(", ")} } }
-  chain output {
-    type filter hook output priority 0; policy accept;
-    meta skuid @sandbox_uids ip daddr ${METADATA_ADDRESS} counter reject
-  }
-}
-`);
+  nftApply(sandboxRules([uid, ...subuids], allowed));
   console.log(`Unprivileged user ${SANDBOX_USER}: ${run("id", [SANDBOX_USER])}`);
   if (values.init) {
     init(values.init);
