@@ -16,6 +16,8 @@ export const SECRET_PATTERNS = [
   "sk-ant-[A-Za-z0-9_-]{20,}",
   "sk-[A-Za-z0-9_-]{20,}",
   "tskey-[A-Za-z0-9-]{10,}",
+  // praxis run tokens (agent/praxis.mjs)
+  "praxis-run-[0-9a-f]{64}",
   // JWTs, such as GitHub's OIDC tokens and the Actions runtime token
   "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]*",
   // A whole block, also when a JSON string holds it with escaped

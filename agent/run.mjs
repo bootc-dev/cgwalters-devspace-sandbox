@@ -14,10 +14,11 @@
 // protocol stream (acp.jsonl) as the transcript, and writes summary.json.
 //
 // Environment (from the workflow): ITEM REPO BASE AGENT MODEL CORES
-// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, PRAXIS_BASE_URL for agents
-// that need inference, and the GITHUB_* run variables. Everything lands in
-// OUT: run/ (the agent-run artifact) and transcript.tar.zst
-// (agent-transcript).
+// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, PRAXIS_BASE_URL and PRAXIS_DIR
+// (agent/praxis.mjs, which registered the run and configured the agent)
+// for agents that need inference, and the GITHUB_* run variables.
+// Everything lands in OUT: run/ (the agent-run artifact) and
+// transcript.tar.zst (agent-transcript).
 import { spawn } from "node:child_process";
 import { appendFileSync, copyFileSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -25,6 +26,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { agentCommand, asAgent, killAgent } from "../scripts/agent-lib.mjs";
 import { SANDBOX_HOME, fail, run } from "../scripts/runner-sandbox.mjs";
+import { USAGE_FILE, finish as finishPraxisRun, runToken } from "./praxis.mjs";
 import { makeRedactor, redactTree } from "./redact.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,12 +38,10 @@ const SOCKET_STDIO = join(ROOT, "scripts/socket-stdio.mjs");
 const HARNESS_FILES = ["acp.jsonl", "agent-stderr.log", "harness.json"];
 // The agents that need inference. They get it from the praxis credential
 // broker on the tailnet (PRAXIS_BASE_URL), which holds the subscription
-// login: nothing on this runner has a model credential.
+// login: nothing on this runner has a model credential, and the agent has
+// only the token of this job's praxis run, which caps and counts its use.
 const INFERENCE_AGENTS = ["opencode"];
 const AGENTS = ["fake", ...INFERENCE_AGENTS];
-// opencode's configuration: the broker as its only provider, with a
-// placeholder key (the broker strips it). The base URL is filled in here.
-const OPENCODE_CONFIG = join(ROOT, "agent/opencode.json");
 // The repository's instructions for agents. opencode doesn't load them
 // itself here (OPENCODE_DISABLE_PROJECT_CONFIG, harness/agents.toml).
 const INSTRUCTION_FILES = { opencode: ["AGENTS.md", "CLAUDE.md"] };
@@ -60,8 +60,8 @@ const EXIT_TIMEOUT = 124;
 // Egress is open, so nothing is denied; summary.json keeps the field.
 const EGRESS_DENIED = [];
 // How a run's AIC is priced: the fake agent reports a made-up cost, and
-// subscription inference through the broker has none per token (so only
-// the timeout bounds it, until the broker counts tokens).
+// subscription inference through the broker has none per token (the
+// broker caps and counts the run's tokens instead).
 const AIC_PRICING = { fake: "mock", opencode: "subscription" };
 // The values of whatever tokens this step can see, for redaction.
 const TOKEN_VARS = ["ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN"];
@@ -90,17 +90,10 @@ function validate() {
   if (INFERENCE_AGENTS.includes(env.AGENT) && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(env.PRAXIS_BASE_URL ?? "")) {
     fail(`agent '${env.AGENT}' needs PRAXIS_BASE_URL, the praxis broker's http(s) URL (the repository variable)`);
   }
+  if (INFERENCE_AGENTS.includes(env.AGENT) && !env.PRAXIS_DIR) {
+    fail(`agent '${env.AGENT}' needs PRAXIS_DIR, where agent/praxis.mjs registered the run`);
+  }
   if (!existsSync(HARNESS_BIN)) fail(`${HARNESS_BIN} is missing (cargo build --release -p bot-harness)`);
-}
-
-// Points the agent at the broker, in runner-sandbox's own configuration.
-function configureInference() {
-  if (env.AGENT !== "opencode") return;
-  const config = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8"));
-  config.provider.praxis.options.baseURL = env.PRAXIS_BASE_URL;
-  const write = asAgent(["sh", "-c", 'mkdir -p "$HOME/.config/opencode" && cat > "$HOME/.config/opencode/opencode.json"'],
-    { input: `${JSON.stringify(config, null, 2)}\n` });
-  if (write.status !== 0) fail("writing runner-sandbox's opencode configuration failed");
 }
 
 // Runs the agent through bot-harness, which prints the condensed
@@ -189,7 +182,13 @@ async function main() {
   const work = join(out, "work");
   for (const dir of [runDir, tx, work, outDir]) mkdirSync(dir, { recursive: true });
   const workdir = `${SANDBOX_HOME}/work/${env.REPO.split("/")[1]}`;
-  const redact = makeRedactor(TOKEN_VARS.map((name) => env[name]).filter(Boolean));
+  const praxisDir = INFERENCE_AGENTS.includes(env.AGENT) ? env.PRAXIS_DIR : null;
+  const redact = makeRedactor([...TOKEN_VARS.map((name) => env[name]), praxisDir && runToken(praxisDir)].filter(Boolean));
+  // Nothing this step starts gets the runner's own credentials, such as
+  // the variables that mint the job's OIDC tokens (every ACTIONS_*):
+  // bot-harness and the agent inherit this environment (the agent through
+  // run0, which passes none of it on anyway).
+  for (const name of Object.keys(env).filter((k) => k.startsWith("ACTIONS_"))) delete env[name];
   process.on("exit", killAgent);
 
   console.log(`::group::Check out ${env.REPO} (${env.BASE}) as runner-sandbox`);
@@ -199,7 +198,6 @@ async function main() {
   console.log(`head: ${oneLine(asAgent(["git", "-C", workdir, "log", "-1", "--format=%h %s"]).stdout.toString().trim())}`);
   console.log("::endgroup::");
 
-  configureInference();
   const started = new Date();
   // The condensed lines never span lines and start with bot-harness's own
   // markers, so none can be read as a workflow command.
@@ -217,6 +215,17 @@ async function main() {
   console.log("::endgroup::");
   const finished = new Date();
   killAgent();
+  // The agent is gone, so the run's usage is final; the workflow ends it
+  // again, if: always(), should this step not get here.
+  let praxisUsage = null;
+  if (praxisDir) {
+    try {
+      praxisUsage = await finishPraxisRun(praxisDir);
+    } catch (e) {
+      // The summary goes on without the broker's counts.
+      console.log(`::warning::${oneLine(e.message)}`);
+    }
+  }
 
   console.log("::group::Collect the run's files");
   const { files, patch } = collect({ workdir, runDir, outDir });
@@ -242,7 +251,7 @@ async function main() {
   writeFileSync(metaFile, JSON.stringify(meta));
   const markdownFile = join(runDir, "summary.md");
   const summary = run(HARNESS_BIN, ["summary", "--dir", tx, "--meta", metaFile, "--outcome", join(runDir, "outcome.json"),
-    "--markdown", markdownFile]);
+    ...(praxisUsage ? ["--praxis-usage", join(praxisDir, USAGE_FILE)] : []), "--markdown", markdownFile]);
   writeFileSync(join(runDir, "summary.json"), `${summary}\n`);
 
   // Public repositories only (scripts/public-repo.mjs), so the transcript

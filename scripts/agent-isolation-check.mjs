@@ -5,12 +5,16 @@
 // also not from a rootless container, and no tailscaled LocalAPI. Its
 // network is otherwise open, except the tailnet: with --tailnet-allow (as
 // given to setup-runner-sandbox.mjs), it reaches only that endpoint there.
+// It gets none of the variables that mint the job's OIDC tokens. With
+// --run-token-file (agent/praxis.mjs), the praxis run token reaches it only
+// in its opencode configuration, which only it can read.
 // Exits nonzero if any check fails.
-//   agent-isolation-check.mjs [--tailnet-allow URL] CONTROL_URL
+//   agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] CONTROL_URL
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { OIDC_REQUEST_VARS, OPENCODE_CONFIG_DIR } from "../agent/praxis.mjs";
 import { asAgent } from "./agent-lib.mjs";
 import { SANDBOX_HOME, SANDBOX_USER, fail } from "./runner-sandbox.mjs";
 
@@ -28,10 +32,20 @@ const LOCALAPI_STATUS = "http://local-tailscaled.sock/localapi/v0/status";
 // runner-sandbox must not reach: SSH, which most hosts listen on.
 const OTHER_TAILNET_PORT = 22;
 
-const { values, positionals } = parseArgs({ options: { "tailnet-allow": { type: "string" } }, allowPositionals: true });
+const { values, positionals } = parseArgs({
+  options: { "tailnet-allow": { type: "string" }, "run-token-file": { type: "string" } }, allowPositionals: true,
+});
 const [control] = positionals;
-if (!control || positionals.length > 1) fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] CONTROL_URL");
+if (!control || positionals.length > 1) {
+  fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] CONTROL_URL");
+}
 const tailnetAllow = values["tailnet-allow"];
+const runTokenFile = values["run-token-file"];
+const OPENCODE_CONFIG = `${SANDBOX_HOME}/${OPENCODE_CONFIG_DIR}/opencode.json`;
+// Where runner-sandbox can write, and so where a token handed to it could
+// have been left: its home, the shared temporary directories, and its
+// runtime directory.
+const WRITABLE = [SANDBOX_HOME, "/tmp", "/var/tmp", "/dev/shm"];
 
 // Quad-100, tailscaled's own address: MagicDNS (which answers PTR queries
 // for every node) and its web ports.
@@ -108,6 +122,64 @@ expect("succeed", `${SANDBOX_USER} reads its own processes' environments (contro
 expect("fail", `no environment ${SANDBOX_USER} can read holds the canary or ACTIONS_ variables`,
   environs.includes(canary) || environs.includes("ACTIONS_"));
 expect("fail", `${SANDBOX_USER} can't list the runner's home`, succeeds(["ls", "/home/runner"]));
+
+// The OIDC request variables are in every step's environment, this one's
+// too when the job has id-token: write; what runs as runner-sandbox starts
+// without them.
+// An agent with a run token got it with the job's OIDC token, so the
+// variables must be here to be proven absent from the sandbox.
+const oidcVars = OIDC_REQUEST_VARS.filter((name) => process.env[name]);
+if (runTokenFile || oidcVars.length > 0) {
+  expect("succeed", `this step has ${OIDC_REQUEST_VARS.join(" and ")} (control)`, oidcVars.length === OIDC_REQUEST_VARS.length);
+} else {
+  console.log("note: this step has no OIDC request variables (no id-token: write), so there are none to leak");
+}
+const agentEnv = asAgent(["env"]).stdout.toString("latin1");
+expect("succeed", `${SANDBOX_USER} runs env (control)`, agentEnv.includes(`HOME=${SANDBOX_HOME}`));
+expect("fail", `${SANDBOX_USER}'s environment has no ACTIONS_ variables`, /^ACTIONS_/m.test(agentEnv));
+for (const name of OIDC_REQUEST_VARS) {
+  const value = process.env[name];
+  if (value) {
+    expect("fail", `no process ${SANDBOX_USER} can read has ${name}'s value`, environs.includes(value));
+  }
+}
+
+// The run token: runner's file is out of reach; runner-sandbox's copy is
+// its opencode configuration, 0600 in a 0700 directory, and nowhere else it
+// can write or read a process's environment or command line. The token
+// goes to the searches on stdin, never on a command line.
+if (runTokenFile) {
+  let token = "";
+  try {
+    token = readFileSync(runTokenFile, "utf8").trim();
+  } catch (e) {
+    console.log(`note: ${e.message}`);
+  }
+  expect("succeed", `runner reads the run token (control)`, /^praxis-run-[0-9a-f]{64}$/.test(token));
+  expect("fail", `${SANDBOX_USER} can't read ${runTokenFile}`, succeeds(["cat", runTokenFile]));
+  const holds = (path) => asAgent(["grep", "-qsF", "-f", "-", "--", path], { input: `${token}\n` }).status === 0;
+  expect("succeed", `${SANDBOX_USER}'s ${OPENCODE_CONFIG} holds the run token (control)`, holds(OPENCODE_CONFIG));
+  const mode = (path) => {
+    const r = spawnSync("sudo", ["stat", "-c", "%U %a", path], { encoding: "utf8" });
+    return r.status === 0 ? r.stdout.trim() : null;
+  };
+  const configDir = OPENCODE_CONFIG.replace(/\/[^/]*$/, "");
+  expect("succeed", `${OPENCODE_CONFIG} is ${SANDBOX_USER}'s, mode 600`, mode(OPENCODE_CONFIG) === `${SANDBOX_USER} 600`);
+  expect("succeed", `its directory is ${SANDBOX_USER}'s, mode 700`, mode(configDir) === `${SANDBOX_USER} 700`);
+  const found = asAgent(["grep", "-rlsF", "-f", "-", "--", ...WRITABLE], { input: `${token}\n` })
+    .stdout.toString().split("\n").filter(Boolean);
+  expect("succeed", `${SANDBOX_USER} finds the token in no other file it can reach (${found.join(", ") || "only the configuration"})`,
+    found.includes(OPENCODE_CONFIG) && found.every((f) => f === OPENCODE_CONFIG));
+  const cmdlines = asAgent(["sh", "-c", "cat /proc/[0-9]*/cmdline 2>/dev/null; true"]).stdout.toString("latin1");
+  expect("fail", `no process ${SANDBOX_USER} can read has the token in its environment or command line`,
+    environs.includes(token) || cmdlines.includes(token));
+  // Containers run rootless as runner-sandbox, whose own uid is their
+  // root; any other uid in them is a subordinate one.
+  const readInContainer = (uid) => succeeds(["podman", "run", "--rm", "--security-opt", "label=disable", "--user", uid,
+    "-v", `${configDir}:/config:ro`, CONTAINER_IMAGE, "cat", "/config/opencode.json"]);
+  expect("succeed", "a container as its root (runner-sandbox) reads the configuration (control)", readInContainer("0"));
+  expect("fail", `a container as subordinate uid ${CONTAINER_UID} can't read the configuration`, readInContainer(CONTAINER_UID));
+}
 expect("succeed", `${SANDBOX_USER} reaches ${control} (control)`, succeeds(curl([control])));
 expect("fail", `${SANDBOX_USER} can't reach the instance metadata service`,
   succeeds(curl(["-H", "Metadata:true", METADATA_URL])));
