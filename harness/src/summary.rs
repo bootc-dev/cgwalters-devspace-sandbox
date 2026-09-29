@@ -1,8 +1,8 @@
 //! `bot-harness summary`: summary.json (agent-run-summary/v1, defined in
 //! docs/devspace-agent-runs.md in cgwalters-bot/homegit) from a recorded
 //! run: its `acp.jsonl` and `harness.json`, plus what the supervisor
-//! measured (META), the agent's `outcome.json` and the inference proxy's
-//! `token-usage.jsonl`.
+//! measured (META), the agent's `outcome.json`, and the inference proxy's
+//! `token-usage.jsonl` or the praxis broker's usage record for the run.
 
 use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
@@ -14,6 +14,16 @@ use crate::digest::{Digest, cut};
 use crate::run::{EXIT_TIMEOUT, Outcome, Record, RunResult};
 
 pub const SCHEMA: &str = "agent-run-summary/v1";
+/// The praxis broker's usage record for a run.
+pub const PRAXIS_SCHEMA: &str = "praxis-run-usage/v2";
+/// summary.json's `tokens_source`: counted by the praxis broker, by the
+/// job's inference proxy, or reported by the agent itself (unverified).
+const TOKENS_PRAXIS: &str = "praxis";
+const TOKENS_PROXY: &str = "proxy";
+const TOKENS_UNVERIFIED: &str = "unverified";
+/// The fields of the praxis record summary.json keeps: numbers and fixed
+/// words only, fit for a run footer.
+const PRAXIS_FIELDS: &[&str] = &["schema", "state", "requests", "unmetered", "tokens"];
 /// summary.json lists at most this many of the slowest tool calls.
 const MAX_SLOWEST: usize = 10;
 /// The fields META passes through as they are.
@@ -81,6 +91,31 @@ fn proxy_usage(log: &[Value]) -> (u64, Value) {
     (turns, tokens)
 }
 
+/// Token counts from the praxis broker's record of the run: what upstream
+/// reported for every request, which the agent can't under-report.
+/// `input` is the uncached part; praxis has no cache-write count.
+fn praxis_tokens(record: &Value) -> Value {
+    let t = &record["tokens"];
+    json!({
+        "input": t["input"],
+        "output": t["output"],
+        "cache_read": t["cache_read"],
+        "cache_write": null,
+    })
+}
+
+/// The part of a praxis record summary.json keeps, or null if it isn't one.
+fn praxis_summary(record: &Value) -> Value {
+    if record["schema"] != PRAXIS_SCHEMA {
+        return Value::Null;
+    }
+    let fields: Map<String, Value> = PRAXIS_FIELDS
+        .iter()
+        .map(|k| ((*k).to_owned(), record[*k].clone()))
+        .collect();
+    Value::Object(fields)
+}
+
 /// Token counts from the `session/prompt` response (a draft ACP field).
 fn acp_usage(usage: &Value) -> Value {
     json!({
@@ -99,6 +134,8 @@ pub struct Inputs<'a> {
     pub outcome: &'a Value,
     /// None without an inference proxy log.
     pub usage_log: Option<&'a [Value]>,
+    /// The praxis broker's usage record for the run, if it had one.
+    pub praxis: Option<&'a Value>,
 }
 
 pub fn summarize(i: &Inputs) -> Value {
@@ -110,15 +147,20 @@ pub fn summarize(i: &Inputs) -> Value {
     };
     let message = i.result.and_then(|r| r.message.clone());
 
-    let (turns, tokens) = match (i.usage_log, &d.usage) {
+    let praxis = i.praxis.map(praxis_summary).unwrap_or(Value::Null);
+    // Where the counts come from: the broker or the job's own proxy saw
+    // every request; the agent's own report is only its word.
+    let (turns, tokens, source) = match (i.usage_log, &d.usage) {
+        _ if !praxis.is_null() => (Value::Null, praxis_tokens(&praxis), json!(TOKENS_PRAXIS)),
         (Some(log), _) if !log.is_empty() => {
             let (turns, tokens) = proxy_usage(log);
-            (json!(turns), tokens)
+            (json!(turns), tokens, json!(TOKENS_PROXY))
         }
-        (_, Some(u)) => (Value::Null, acp_usage(u)),
+        (_, Some(u)) => (Value::Null, acp_usage(u), json!(TOKENS_UNVERIFIED)),
         _ => (
             Value::Null,
             json!({"input": null, "output": null, "cache_read": null, "cache_write": null}),
+            Value::Null,
         ),
     };
 
@@ -204,6 +246,9 @@ pub fn summarize(i: &Inputs) -> Value {
     s.insert("result".into(), json!(result.as_str()));
     s.insert("turns".into(), turns);
     s.insert("tokens".into(), tokens);
+    s.insert("tokens_source".into(), source);
+    // An addition: the broker's own count and cap for the run.
+    s.insert("praxis".into(), praxis);
     // USD to AIC (1 AIC = $0.01), to a tenth.
     let aic = d.cost_usd.map(|usd| (usd * 1000.0).round() / 10.0);
     s.insert("aic".into(), json!(aic));
@@ -291,9 +336,14 @@ pub fn markdown(s: &Value) -> String {
             human_duration(&s["duration_s"]),
             or(&s["turns"], "?"),
             format!(
-                "{} / {}",
+                "{} / {}{}",
                 human_count(&s["tokens"]["input"]),
-                human_count(&s["tokens"]["output"])
+                human_count(&s["tokens"]["output"]),
+                if s["tokens_source"] == TOKENS_UNVERIFIED {
+                    " (agent-reported, unverified)"
+                } else {
+                    ""
+                }
             ),
             format!(
                 "{} of {} ({})",
@@ -303,6 +353,20 @@ pub fn markdown(s: &Value) -> String {
             ),
         ]),
     ];
+    let p = &s["praxis"];
+    if p.is_object() {
+        out.extend([
+            String::new(),
+            format!(
+                "Inference: praxis run {}, {} tokens ({} cached), {} metered request(s), {} without usage.",
+                text(&p["state"]),
+                human_count(&p["tokens"]["total"]),
+                human_count(&p["tokens"]["cache_read"]),
+                text(&p["requests"]),
+                text(&p["unmetered"])
+            ),
+        ]);
+    }
     if let Some(url) = s["outcome"]["url"].as_str() {
         out.extend([String::new(), format!("Result: {url}")]);
     }
@@ -509,13 +573,74 @@ Redacted 1 string(s).
                 meta: &m,
                 outcome: &json!({}),
                 usage_log: None,
+                praxis: None,
             });
             assert_eq!(s["result"], want);
             assert_eq!(s["failures"][0]["kind"], kind);
             assert_eq!(s["model"], "m-default");
             assert_eq!(s["tokens"]["input"], Value::Null);
+            assert_eq!(s["tokens_source"], Value::Null);
             assert_eq!(s["turns"], Value::Null);
         }
+    }
+
+    #[test]
+    fn praxis_record_gives_the_tokens_and_a_footer_safe_summary() {
+        let records = [rec(
+            0.0,
+            Dir::Send,
+            json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"}),
+        )];
+        let record = json!({
+            "schema": PRAXIS_SCHEMA, "repository": "o/r", "run_id": 1, "run_attempt": 1,
+            "repository_id": 7, "check_run_id": 9, "workflow_ref": "o/r/.github/workflows/agent.yml@refs/heads/main",
+            "state": "finished", "registered_at_unix": 1, "expires_at_unix": 2, "finished_at_unix": 2,
+            "requests": 3, "unmetered": 1,
+            "tokens": {"input": 400, "cache_read": 600, "output": 50, "reasoning": 20, "total": 1050},
+            "models": {"gpt-test": {"input": 400, "cache_read": 600, "output": 50, "reasoning": 20, "total": 1050}},
+        });
+        let log = [json!({"input_tokens": 1, "output_tokens": 1})];
+        let m = meta(0);
+        let summarize_with = |praxis| {
+            summarize(&Inputs {
+                records: &records,
+                result: None,
+                meta: &m,
+                outcome: &json!({}),
+                usage_log: Some(&log),
+                praxis,
+            })
+        };
+        let s = summarize_with(Some(&record));
+        assert_eq!(s["tokens_source"], TOKENS_PRAXIS);
+        // The broker's count wins over any other.
+        assert_eq!(
+            s["tokens"],
+            json!({"input": 400, "output": 50, "cache_read": 600, "cache_write": null})
+        );
+        assert_eq!(s["praxis"]["tokens"]["total"], 1050);
+        assert_eq!(s["praxis"]["unmetered"], 1);
+        // Only numbers and fixed words: no names, refs or model ids.
+        for k in [
+            "repository",
+            "workflow_ref",
+            "models",
+            "run_id",
+            "check_run_id",
+        ] {
+            assert!(s["praxis"].get(k).is_none(), "{k}");
+        }
+        let md = markdown(&s);
+        assert!(
+            md.contains("Inference: praxis run finished, 1k tokens (600 cached), 3 metered request(s), 1 without usage."),
+            "{md}"
+        );
+        // Anything else is ignored, and the other counts apply.
+        let s = summarize_with(Some(&json!({"schema": "other/v1"})));
+        assert_eq!(s["praxis"], Value::Null);
+        assert_eq!(s["tokens"]["input"], 1);
+        assert_eq!(s["tokens_source"], TOKENS_PROXY);
+        assert!(!markdown(&s).contains("Inference:"));
     }
 
     #[test]
@@ -648,6 +773,7 @@ Redacted 1 string(s).
                 meta: &m,
                 outcome: &json!({"tests": [{"command": "git log", "exit_code": 0, "duration_s": 0}, "junk"]}),
                 usage_log: usage.as_deref(),
+                praxis: None,
             });
             assert_eq!(s["schema"], SCHEMA, "{dir}");
             assert_eq!(s["result"], c.result, "{dir}: {s:#}");
@@ -677,9 +803,16 @@ Redacted 1 string(s).
             assert_eq!(s["turns"].as_u64(), c.turns, "{dir}");
             if c.turns.is_some() {
                 assert!(s["tokens"]["input"].as_u64().unwrap() > 0, "{dir}");
+                assert_eq!(s["tokens_source"], TOKENS_PROXY, "{dir}");
             } else {
-                // Without the proxy's log, from the prompt response.
+                // Without the proxy's log, from the prompt response: the
+                // agent's word only.
                 assert!(s["tokens"]["output"].as_u64().unwrap() > 0, "{dir}: {s:#}");
+                assert_eq!(s["tokens_source"], TOKENS_UNVERIFIED, "{dir}");
+                assert!(
+                    markdown(&s).contains("(agent-reported, unverified)"),
+                    "{dir}"
+                );
             }
             assert_eq!(
                 s["tests"],

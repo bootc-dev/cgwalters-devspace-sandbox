@@ -99,6 +99,10 @@ struct SummaryArgs {
     /// The inference proxy's per-request log.
     #[arg(long)]
     usage_log: Option<PathBuf>,
+    /// The praxis broker's usage record for the run (praxis-run-usage/v2);
+    /// its token counts take precedence.
+    #[arg(long)]
+    praxis_usage: Option<PathBuf>,
     /// Also write the summary as Markdown here, for the job's step summary.
     #[arg(long)]
     markdown: Option<PathBuf>,
@@ -195,12 +199,14 @@ fn cmd_summary(a: SummaryArgs) -> Result<ExitCode> {
         Some(p) if p.exists() => Some(summary::read_jsonl(p)?),
         _ => None,
     };
+    let praxis = a.praxis_usage.as_deref().map(read_json).transpose()?;
     let s = summary::summarize(&summary::Inputs {
         records: &records,
         result: result.as_ref(),
         meta: &meta,
         outcome: &outcome,
         usage_log: usage.as_deref(),
+        praxis: praxis.as_ref(),
     });
     if let Some(path) = &a.markdown {
         std::fs::write(path, summary::markdown(&s))
