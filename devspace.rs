@@ -331,10 +331,20 @@ fn active_runs(runs: &[Run]) -> Result<Vec<&Run>> {
     }
     Ok(active)
 }
+/// Whether a run's title is devspace.yml's run-name for `session`:
+/// "Devspace SESSION (16c, 120m)", or "Devspace SESSION" from revisions
+/// before the size and duration were added. The " (" keeps a session
+/// from matching a longer one that starts with its name.
+fn is_session_title(title: &str, session: &str) -> bool {
+    title
+        .strip_prefix("Devspace ")
+        .and_then(|t| t.strip_prefix(session))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(" ("))
+}
 fn find_run<'a>(session: &str, since: DateTime<Utc>, runs: &'a [Run]) -> Option<&'a Run> {
     let mut matches = runs
         .iter()
-        .filter(|r| r.display_title == format!("Devspace {session}") && r.created_at >= since);
+        .filter(|r| is_session_title(&r.display_title, session) && r.created_at >= since);
     let first = matches.next()?;
     matches.next().is_none().then_some(first)
 }
@@ -737,6 +747,20 @@ mod tests {
         assert_eq!(hostname(2), "cgwalters-devspace-2");
     }
     #[test]
+    fn session_titles() {
+        for (title, want) in [
+            ("Devspace session-a", true),
+            ("Devspace session-a (16c, 120m)", true),
+            ("Devspace session-ab", false),
+            ("Devspace session-ab (4c, 30m)", false),
+            ("Devspace session", false),
+            ("Devspace session-a(16c, 120m)", false),
+            ("devspace session-a", false),
+        ] {
+            assert_eq!(is_session_title(title, "session-a"), want, "{title}");
+        }
+    }
+    #[test]
     fn correlation_uses_parsed_timestamps_and_rejects_fences() {
         let before = Run {
             created_at: timestamp("2025-12-31T23:59:59Z"),
@@ -969,6 +993,21 @@ mod tests {
             .map(|value| value.as_str().unwrap().to_string())
             .collect();
         assert_eq!(labels, sizes.values().cloned().collect());
+    }
+    #[test]
+    fn run_name_is_a_session_title() {
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(".github/workflows/devspace.yml").unwrap())
+                .unwrap();
+        let title = find_yaml_key(&workflow, "run-name")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .replace("${{ inputs.session_name || github.run_id }}", "session-a")
+            .replace("${{ inputs.cores }}", "16")
+            .replace("${{ inputs.duration }}", "120");
+        assert_eq!(title, "Devspace session-a (16c, 120m)");
+        assert!(is_session_title(&title, "session-a"));
     }
     #[test]
     fn durations_match_workflow() {
