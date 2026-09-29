@@ -32,3 +32,8 @@ init:
     chmod -R go-w "$homegit" "$HOME/.local/bin"
     (cd "$homegit/dotfiles" && find . -mindepth 1 ! -type l -print0) | (cd "$HOME" && xargs -0 chmod go-w --)
     find "$HOME" -maxdepth 1 -name '.*' ! -type l -perm /go+w -exec chmod go-w {} +
+
+# The harness's and the agent scripts' tests.
+test:
+    cargo test --workspace --locked
+    node --test agent/*.test.mjs

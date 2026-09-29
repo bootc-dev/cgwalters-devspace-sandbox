@@ -111,9 +111,12 @@ EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
 `.github/workflows/agent.yml` runs an agent on one task, unattended, as the
 same unprivileged `runner-sandbox` user, in a login session of its own, which
 `scripts/agent-lib.mjs` kills when the run ends. The job has no secrets; its
-`id-token` permission is only for the tailnet login of runs that need inference
-(see below). `scripts/agent-isolation-check.mjs` verifies before every run that
-the agent can't use sudo, read the job's environment or files, or reach the
+`id-token` permission is only for runs that need inference, to join the
+tailnet and register with the broker (see below). GitHub puts the variables
+that request those OIDC tokens in every step's environment; the agent starts
+without them (`scripts/runner-sandbox.mjs`), and the isolation check proves
+it. `scripts/agent-isolation-check.mjs` verifies before every run that the
+agent can't use sudo, read the job's environment or files, or reach the
 cloud metadata service, also from a container on the host network. Its
 network access is otherwise open for now, except the tailnet; the plan is a
 proxy that sees requests and allows writes (`POST` and the like) only to
@@ -158,13 +161,22 @@ token-shaped string for the redaction pass to catch.
 [praxis credential broker](https://github.com/cgwalters-bot/praxis-credential-broker)
 on the tailnet, at the `PRAXIS_BASE_URL` repository variable
 (`http://<tailnet IPv4>:<port>/v1`). The broker holds the subscription
-login and runs without client authentication, leaving access to the
-tailnet ACL, so nothing on the runner holds a model credential:
-`agent/opencode.json` makes the broker opencode's only provider, with a
-placeholder key, and `harness/agents.toml` keeps opencode from loading the
-target repository's own configuration (which could bring other providers
-or plugins back). That also means every node with the runners' tag can
-spend the subscription.
+login, so nothing on the runner holds a model credential. It admits a
+request only with the token of a registered run
+([run tokens](https://github.com/cgwalters-bot/praxis-credential-broker/blob/main/INTERNALS.md#run-tokens)):
+`agent/praxis.mjs register` has the job's supervisor request an OIDC token
+for the audience `praxis-credential-broker` and register the run with it
+(`POST /v1/runs`, no body), which the broker's `run-token-policy.yaml`
+allows only for this repository and workflow, pinned by id, when
+dispatched by hand.
+The run token it gets back stays in a directory only `runner` can read and
+is masked in the log. `praxis.mjs configure` puts it in `runner-sandbox`'s
+opencode configuration (`agent/opencode.json`, mode 0600), the only place
+the agent gets it; the isolation check proves it's nowhere else the agent
+can read. The broker's per-run cap and lifetime then bound what the agent
+spends, and nodes with the runners' tag but no registered run get nothing.
+`harness/agents.toml` keeps opencode from loading the target repository's
+own configuration (which could bring other providers or plugins back).
 
 For these runs the job joins the tailnet as devspaces do, after the same
 hardening (sshd stopped, Cockpit off), but without MagicDNS
@@ -175,8 +187,23 @@ allows more. Underneath it, as defence in depth, `setup-runner-sandbox.mjs
 Tailscale interface or to a tailnet address (quad-100 and the runner's own
 included), except to the broker's address and port, and tailscaled's
 LocalAPI is closed to it. There is no per-token
-cost, so the `budget` input doesn't apply (`aic_pricing: subscription`) and
-the timeout bounds the run, until the broker counts tokens itself.
+cost, so the `budget` input doesn't apply (`aic_pricing: subscription`):
+the broker's per-run cap bounds the run's tokens, and its policy's
+`max_secs` and the timeout its time. (`budget` isn't turned into a token
+cap: AIC prices tokens, and these have no price.) A broker that refuses
+the registration fails the run there, with the policy entry it needs. A
+broker from before run tokens, which has no `/v1/runs` (404), is used as
+before, without a token and uncapped, with a warning: that keeps runs
+working until the broker's cutover, and grants nothing on a broker with
+run tokens, which refuses requests without one. When the
+agent is done, `run.mjs` ends the praxis run (`DELETE /v1/runs/self`), so
+its token admits nothing more, and `bot-harness summary` takes the run's
+token counts from the broker's usage record (`--praxis-usage`), into
+`summary.json`'s `tokens` and `praxis` fields and the step summary
+(`tokens_source: praxis`; counts only the agent reported are marked
+`unverified`). An `always()` step ends the run again, whatever happened
+before, and nothing is uploaded unless it succeeded: until then the token
+may still work.
 
 The harness lives here, next to `agent.yml`, until the
 [task harness design](https://gist.github.com/cgwalters-bot/290d1fbd3545e430f7717948caab260f)

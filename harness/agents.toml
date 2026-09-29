@@ -13,12 +13,12 @@ model-env = "ANTHROPIC_MODEL"
 env = { DISABLE_AUTOUPDATER = "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1" }
 
 # opencode speaks ACP natively; its model is a session config option. Its
-# providers come only from the global configuration run.mjs writes: not
-# from the target repository's opencode.json or .opencode/ (which could
-# add providers or plugins), nor fetched from models.dev. The same switch
-# also stops opencode loading the repository's AGENTS.md and CLAUDE.md as
-# instructions, so run.mjs points the prompt at them instead. The
-# repository's skills (.claude/skills, .agents/skills) still load: like
+# providers come only from the global configuration agent/praxis.mjs
+# writes: not from the target repository's opencode.json or .opencode/
+# (which could add providers or plugins), nor fetched from models.dev. The
+# same switch also stops opencode loading the repository's AGENTS.md and
+# CLAUDE.md as instructions, so run.mjs points the prompt at them instead.
+# The repository's skills (.claude/skills, .agents/skills) still load: like
 # AGENTS.md they are only text for the model, and
 # OPENCODE_DISABLE_EXTERNAL_SKILLS would drop the project's own guidance
 # without adding a boundary.
