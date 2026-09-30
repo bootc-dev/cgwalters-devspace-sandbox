@@ -1,5 +1,7 @@
 name: Development runner
-run-name: "Devspace ${{ inputs.session_name || github.run_id }}"
+# bot-devspace (in cgwalters-bot/homegit) finds its runs by this title, and
+# the review app reads the size and duration from it.
+run-name: "Devspace ${{ inputs.session_name || github.run_id }} (${{ inputs.cores }}c, ${{ inputs.duration }}m)"
 
 on:
   workflow_dispatch:
