@@ -75,6 +75,7 @@ steps:
       PermitRootLogin no
       AllowUsers runner
       CONF
+      sudo install -d -m 755 /run/sshd
       sudo /usr/sbin/sshd -t
       sudo systemctl stop ssh.socket 2>/dev/null || true
       sudo systemctl restart ssh.service || sudo systemctl restart sshd.service
