@@ -1,0 +1,25 @@
+#!/bin/bash
+# xsh CONTAINER cmd...: run cmd as runner in CONTAINER with /host as the
+# mount-namespace root (mount --move, not chroot) unless MODE=chroot.
+set -euo pipefail
+c=$1; shift
+p=$(pgrep -n keepalive.sh)
+envargs=()
+while IFS= read -r -d '' kv; do [[ $kv == LD_PRELOAD=* ]] || envargs+=("$kv"); done < <(sudo cat /proc/$p/environ)
+envargs+=(XDG_RUNTIME_DIR=/tmp/xdg-$c REGISTRY_AUTH_FILE=/tmp/auth.json)
+groups=$(awk '/^Groups:/{for(i=2;i<=NF;i++) printf "%s%s", (i>2?",":""), $i}' /proc/$p/status)
+groups+="${EXTRA_GROUPS:+,$EXTRA_GROUPS}"
+drop="${BSET_DROP:--sys_admin,-sys_chroot}"
+priv=(setpriv --reuid=1001 --regid=1001 --groups="$groups" --bounding-set="$drop" --inh-caps=-all)
+mkdir -p /tmp/xdg-$c
+tty=-i; [ -t 0 ] && tty=-it
+if [ "${MODE:-move}" = chroot ]; then
+  exec docker exec -e PROC_OPTS="${PROC_OPTS:-hidepid=invisible}" $tty "$c" sh -c "mkdir -p /host/proc /host/etc; mountpoint -q /host/proc || mount -t proc -o ${PROC_OPTS} proc /host/proc; [ -s /host/etc/resolv.conf ] || echo nameserver 127.0.0.11 > /host/etc/resolv.conf; exec chroot /host \"\$@\"" sh /usr/bin/env -i "${envargs[@]}" "${priv[@]}" -- "$@"
+fi
+exec docker exec -e PROC_OPTS="${PROC_OPTS:-hidepid=invisible}" $tty "$c" unshare -m --propagation private /bin/sh -c '
+  set -e
+  mkdir -p /host/proc /host/etc; mountpoint -q /host/proc || mount -t proc -o ${PROC_OPTS} proc /host/proc; [ -s /host/etc/resolv.conf ] || echo nameserver 127.0.0.11 > /host/etc/resolv.conf
+  mount --rbind /host /host
+  cd /host
+  mount --move . /
+  exec chroot . "$@"' sh /usr/bin/env -i "${envargs[@]}" "${priv[@]}" -- "$@"

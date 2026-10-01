@@ -1,0 +1,10 @@
+#!/bin/bash
+# Run a command as the agent would see things: inside awf-agent, chroot /host,
+# uid runner, with the agent's environment, under the container's seccomp+NNP.
+set -euo pipefail
+p=$(pgrep -n keepalive.sh)
+envargs=()
+while IFS= read -r -d '' kv; do envargs+=("$kv"); done < <(sudo cat /proc/$p/environ)
+groups=$(awk '/^Groups:/{for(i=2;i<=NF;i++) printf "%s%s", (i>2?",":""), $i}' /proc/$p/status)
+tty=-i; [ -t 0 ] && tty=-it
+exec docker exec $tty -w "${AGENT_CWD:-/home/runner}" awf-agent chroot --userspec=1001:1001 --groups="$groups" /host /usr/bin/env -i "${envargs[@]}" "$@"

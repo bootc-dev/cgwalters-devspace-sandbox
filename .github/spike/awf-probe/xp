@@ -1,0 +1,4 @@
+#!/bin/bash
+# xp CONTAINER podman-args...: podman inside a test container with isolated storage
+c=$1; shift
+exec ~/xsh "$c" env TMPDIR=/tmp/xdg-$c podman --root /tmp/xdg-$c/storage --runroot /tmp/xdg-$c/runroot "$@"

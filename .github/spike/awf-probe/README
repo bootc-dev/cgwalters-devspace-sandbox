@@ -1,0 +1,7 @@
+Runner-side helpers used over ssh during the AWF run (aw-spike):
+  agentsh CMD        run CMD like the agent: in awf-agent, chroot /host, uid runner, agent env
+  ap ARGS            podman in agentsh with isolated storage
+  relaunch.sh N IP   sibling of awf-agent on awf-net with the same binds/caps; SECCOMP=awf|unconfined|FILE NNP=1|0
+  xsh C CMD          run CMD as runner in sibling C, /host made the mount-ns root (MODE=chroot for AWF's way)
+                     knobs: PROC_OPTS (default hidepid=invisible), BSET_DROP, EXTRA_GROUPS
+  xp C ARGS          podman via xsh with isolated storage

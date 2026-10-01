@@ -1,0 +1,4 @@
+#!/bin/bash
+# podman inside the agent sandbox with isolated storage
+mkdir -p /tmp/xdg-agent
+exec ~/agentsh env XDG_RUNTIME_DIR=/tmp/xdg-agent REGISTRY_AUTH_FILE=/tmp/auth.json podman --root /tmp/xdg-agent/storage --runroot /tmp/xdg-agent/runroot "$@"
