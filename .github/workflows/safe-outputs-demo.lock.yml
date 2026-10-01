@@ -417,7 +417,7 @@ jobs:
           const fs = require("node:fs");
           const crypto = require("node:crypto");
           const { spawnSync } = require("node:child_process");
-          const { parse, format, neutralize } = require("/usr/local/libexec/runner-sandbox-filecmd.cjs");
+          const { parse, format, neutralize, allowedCommands } = require("/usr/local/libexec/runner-sandbox-filecmd.cjs");
 
           const RUN = "/usr/local/libexec/runner-sandbox-run";
           const SUDO = "/usr/bin/sudo";
@@ -428,10 +428,15 @@ jobs:
           ];
           const USAGE = "usage: runner-sandbox-exec SCRIPT | --action SPEC | --action-path USES SCRIPT | --stage NAME PATH | --seal";
 
+          // Set to 0 by the compiler for a step whose output may hold no
+          // annotations (filecmd.cjs), such as an agent's.
+          const annotations = process.env.RUNNER_SANDBOX_ANNOTATIONS !== "0";
+
           // MESSAGE can quote what the sandbox wrote, so its lines go through the
           // same filter as the sandbox's own output.
           function fail(message) {
-            console.error(String(message).split(/\r\n|\r|\n/).map((l) => neutralize(`runner-sandbox-exec: ${l}`)).join("\n"));
+            const allowed = allowedCommands(annotations);
+            console.error(String(message).split(/\r\n|\r|\n/).map((l) => neutralize(`runner-sandbox-exec: ${l}`, true, allowed)).join("\n"));
             process.exit(125);
           }
 
@@ -475,6 +480,7 @@ jobs:
             default:
               request = { id, script: fs.readFileSync(args[0], "utf8"), env };
           }
+          request.annotations = annotations;
           // By absolute path: the step's own env: applies to this process.
           const r = spawnSync(SUDO, ["-n", RUN], { input: JSON.stringify(request), stdio: ["pipe", "inherit", "inherit"] });
           if (r.error) fail(`running ${RUN}: ${r.error.message}`);
@@ -519,7 +525,10 @@ jobs:
           // the sandbox's, so CommandFilter neutralizes every command in it except
           // the annotations linters report with (`warning`, `error`, `notice`),
           // `debug`, and `group`/`endgroup`, which fold the log: they only show
-          // text. The others would set outputs or state
+          // text. A step whose output isn't a linter's but an agent's, which a
+          // prompt can steer, gets no annotations either (`annotations: false`):
+          // they would put its text on the run and on pull requests' checks. The
+          // others would set outputs or state
           // behind the file commands' checks (`set-output`, `save-state`), change
           // the runner's environment, PATH or problem matchers, mask text in later
           // steps' logs, or stop command processing for the steps after it.
@@ -572,7 +581,12 @@ jobs:
             return `${name}<<${delimiter}\n${value}\n${delimiter}\n`;
           }
 
-          const ALLOWED_COMMANDS = new Set(["warning", "error", "notice", "debug", "group", "endgroup"]);
+          const TEXT_COMMANDS = ["debug", "group", "endgroup"];
+          const ANNOTATIONS = ["warning", "error", "notice"];
+          const ALLOWED_COMMANDS = new Set([...ANNOTATIONS, ...TEXT_COMMANDS]);
+          const ALLOWED_NO_ANNOTATIONS = new Set(TEXT_COMMANDS);
+          // The commands a step's output may use.
+          const allowedCommands = (annotations) => (annotations ? ALLOWED_COMMANDS : ALLOWED_NO_ANNOTATIONS);
           const LEGACY_PREFIX = "##[";
           const NEUTRALIZED_LEGACY = "## [";
           const MARK = "[sandbox] ";
@@ -581,21 +595,23 @@ jobs:
 
           // LINE, one line of a sandboxed step's output, with its commands
           // neutralized. AT_START is false for the rest of a line whose start was
-          // already passed on.
-          function neutralize(line, atStart = true) {
+          // already passed on. ALLOWED is the set of commands left as they are.
+          function neutralize(line, atStart = true, allowed = ALLOWED_COMMANDS) {
             const out = line.replaceAll(LEGACY_PREFIX, NEUTRALIZED_LEGACY);
             if (!atStart) return out;
             // The runner trims what .NET calls whitespace, which includes U+0085.
             const m = /^([\s\u0085]*)::([^\s\u0085:]*)/.exec(out);
-            if (!m || ALLOWED_COMMANDS.has(m[2].toLowerCase())) return out;
+            if (!m || allowed.has(m[2].toLowerCase())) return out;
             return `${m[1]}${MARK}${out.slice(m[1].length)}`;
           }
 
           // Filters a stream of a sandboxed step's output: push() chunks as they
           // come, and end() at the end; both return what to pass on. Lines end
-          // where the runner's reader ends them, at \n, \r or \r\n.
+          // where the runner's reader ends them, at \n, \r or \r\n. ANNOTATIONS
+          // false neutralizes annotations too.
           class CommandFilter {
-            constructor() {
+            constructor({ annotations = true } = {}) {
+              this.allowed = allowedCommands(annotations);
               this.decoder = new StringDecoder("utf8");
               this.held = "";
               this.atStart = true;
@@ -608,14 +624,14 @@ jobs:
                 const m = /\r\n|\r|\n/.exec(this.held);
                 // A \r at the end may be the start of \r\n.
                 if (!m || (m[0] === "\r" && m.index === this.held.length - 1)) break;
-                out += neutralize(this.held.slice(0, m.index), this.atStart) + m[0];
+                out += neutralize(this.held.slice(0, m.index), this.atStart, this.allowed) + m[0];
                 this.held = this.held.slice(m.index + m[0].length);
                 this.atStart = true;
               }
               if (this.held.length > MAX_HELD) {
                 // Keep the last two characters: they may begin a "##[".
                 const keep = this.held.slice(-2);
-                out += neutralize(this.held.slice(0, -2), this.atStart);
+                out += neutralize(this.held.slice(0, -2), this.atStart, this.allowed);
                 this.held = keep;
                 this.atStart = false;
               }
@@ -625,11 +641,11 @@ jobs:
             end() {
               const rest = this.held + this.decoder.end();
               this.held = "";
-              return rest === "" ? "" : neutralize(rest, this.atStart);
+              return rest === "" ? "" : neutralize(rest, this.atStart, this.allowed);
             }
           }
 
-          module.exports = { parse, format, NAME_RE, neutralize, CommandFilter };
+          module.exports = { parse, format, NAME_RE, neutralize, allowedCommands, CommandFilter };
         RUNNER_SANDBOX_HANDOFF_JS: |
           // The workspace hand-off: what the enter step copies from the runner's
           // workspace into the sandbox's. install.cjs loads it (the compiler passes
@@ -988,6 +1004,7 @@ jobs:
             fail(`invalid request: ${e.message}`);
           }
           if (!/^[0-9a-f]{32}$/.test(req.id ?? "")) fail("invalid step id");
+          if (req.annotations !== undefined && typeof req.annotations !== "boolean") fail("invalid annotations");
           if (typeof req.script !== "string" && typeof req.action !== "object" && typeof req.stage !== "object" && req.seal !== true) fail("missing script");
           const env = req.env ?? {};
           // The environment reaches the step through a file (see LAUNCHER), so
@@ -1225,7 +1242,7 @@ jobs:
               const child = spawn("run0", args, { stdio: ["pipe", "pipe", "pipe"] });
               child.stdin.end();
               for (const [from, to] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
-                const filter = new CommandFilter();
+                const filter = new CommandFilter({ annotations: req.annotations !== false });
                 from.on("data", (chunk) => to.write(filter.push(chunk)));
                 from.on("end", () => to.write(filter.end()));
               }
@@ -1443,6 +1460,7 @@ jobs:
         HARNESS_SHARE: /usr/local/share/bot-harness
         POLICY: /etc/agent-share/agent-policy.toml
         PROMPT: /etc/agent-share/agentskills/safe-outputs.md
+        RUNNER_SANDBOX_ANNOTATIONS: '0'
         RUNNER_SANDBOX_ENV: AGENT,AGENTS,BUDGET,HARNESS_SHARE,POLICY,PROMPT,TIMEOUT_MINUTES
         TIMEOUT_MINUTES: '10'
       id: agent
@@ -1465,7 +1483,9 @@ jobs:
       name: Stage safe-outputs as safe-outputs (generated)
       run: /usr/local/bin/runner-sandbox-exec --stage safe-outputs safe-outputs
       shell: bash
-    - if: always()
+    - env:
+        RUNNER_SANDBOX_ANNOTATIONS: '0'
+      if: always()
       name: Show the sandbox checks
       run: cat sandbox-checks.log
       shell: /usr/local/bin/runner-sandbox-exec {0}
@@ -1499,18 +1519,20 @@ jobs:
   apply:
     needs: agent
     permissions:
+      contents: write
       issues: write
+      pull-requests: write
     runs-on: ubuntu-26.04
     steps:
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: safe-outputs
-        path: proposals
-    - name: Share proposals as /etc/agent-share/proposals (generated)
+        path: safe-outputs-proposals
+    - name: Share safe-outputs-proposals as /etc/agent-share/safe-outputs-proposals (generated)
       uses: cgwalters-forge/actions/sandbox-share@f1cc343b8404c22aadbc8c5a7d0923dae4015179
       with:
-        name: proposals
-        path: proposals
+        name: safe-outputs-proposals
+        path: safe-outputs-proposals
     - name: Share safe-outputs-config.json as /etc/agent-share/safe-outputs-config.json (generated)
       uses: cgwalters-forge/actions/sandbox-share@f1cc343b8404c22aadbc8c5a7d0923dae4015179
       with:
@@ -1520,12 +1542,23 @@ jobs:
             "repo": "bootc-dev/cgwalters-devspace-sandbox",
             "types": {
               "add_comment": {
-                "default_target": 12,
                 "max": 1,
-                "max_body_bytes": 8192,
+                "max_body_bytes": 16384,
                 "targets": [
                   12
                 ]
+              },
+              "create_pull_request": {
+                "allowed_paths": [
+                  "docs/**"
+                ],
+                "base": "wfc-spike",
+                "branch_prefix": "wfc-spike-outputs/",
+                "draft": true,
+                "max": 1,
+                "max_body_bytes": 16384,
+                "max_files": 20,
+                "max_patch_bytes": 16384
               },
               "noop": {
                 "max": 1
@@ -1533,36 +1566,29 @@ jobs:
             }
           }
         name: safe-outputs-config.json
-    - name: Share validate.cjs as /etc/agent-share/validate.cjs (generated)
+    - name: Share safe-outputs-lib.cjs as /etc/agent-share/safe-outputs-lib.cjs (generated)
       uses: cgwalters-forge/actions/sandbox-share@f1cc343b8404c22aadbc8c5a7d0923dae4015179
       with:
         content: |
-          // Safe outputs, step 1 of 2: validate an agent's proposals.
+          // Safe outputs: the checks an agent's proposed outputs must pass, for
+          // lib/safe-outputs.ncl's apply job. Shared there as
+          // /etc/agent-share/safe-outputs-lib.cjs and required by both
+          // safe-outputs-validate.cjs, in the sandbox, and safe-outputs-apply.cjs,
+          // in the publish phase, which runs every check again on what the sandbox
+          // accepted before it writes anything.
           //
-          // Runs in the apply job's sandbox (as runner-sandbox, with no token), on
-          // the JSONL the agent job uploaded, which is the agent's data and
-          // untrusted. Every line is checked against the config the privileged
-          // phase shared (types, fields, targets, sizes, counts) and scanned for
-          // secrets, and the accepted ones are sanitized. The result is staged for
-          // apply.cjs, which re-checks the hard limits before it writes anything.
-          //
-          // The proposal format follows gh-aw's safe outputs (`type` plus the
-          // fields of that type, one JSON object per line), so an agent prompted
-          // for gh-aw's tools can write it.
-          //
-          // Usage: node validate.cjs CONFIG PROPOSALS_DIR OUT_DIR
+          // The format follows gh-aw's safe outputs: one JSON object per line, with
+          // a `type` and that type's fields. The CONFIG is the source's, as
+          // lib/safe-outputs.ncl serializes it: { repo, max_total, types: { TYPE:
+          // { max, ... } } }.
           "use strict";
-          const fs = require("node:fs");
-          const path = require("node:path");
 
-          const PROPOSALS_FILE = "outputs.jsonl";
-          const MAX_FILE_BYTES = 1024 * 1024;
-          const MAX_LINE_BYTES = 64 * 1024;
           const MAX_LINES = 100;
+          const MAX_LINE_BYTES = 256 * 1024;
           const MAX_REASON = 200;
 
-          // Token shapes that must never leave the job, from bot-harness's redaction
-          // list and gh-aw's secret redaction.
+          // Token shapes that must never leave the job, from bot-harness's
+          // redaction list and gh-aw's secret redaction.
           const SECRET_PATTERNS = [
             [/\bgh[pousr]_[A-Za-z0-9]{20,}/, "GitHub token"],
             [/\bgithub_pat_[A-Za-z0-9_]{20,}/, "GitHub fine-grained token"],
@@ -1572,203 +1598,408 @@ jobs:
             [/\bsk-ant-[A-Za-z0-9_-]{10,}/, "Anthropic key"],
           ];
 
-          // The fields each type may have, besides `type`; a proposal with any
-          // other field is refused rather than silently trimmed.
-          const TYPES = {
+          // The fields of each type besides `type`: a proposal with any other
+          // field is refused rather than trimmed.
+          const FIELDS = {
             add_comment: { required: ["body"], optional: ["item_number", "repo"] },
+            create_pull_request: { required: ["title", "body", "patch"], optional: ["repo"] },
             noop: { required: ["message"], optional: [] },
           };
 
-          // The proposals file, wherever the artifact and the share nested it, at
-          // most a few directories down; never through a symlink.
-          function findProposals(dir, depth = 3) {
-            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-              if (e.isFile() && e.name === PROPOSALS_FILE) return path.join(dir, e.name);
+          // Paths no pull request may touch, whatever the allowlist says: the
+          // repository's workflows and actions (they'd run with its secrets), and
+          // git's own files.
+          const DENIED_PATHS = [/^\.github\//, /(^|\/)\.git(\/|$)/, /(^|\/)\.gitmodules$/];
+
+          // gh-aw's sanitize_content, the parts that matter for text posted to
+          // GitHub: no @mentions that would notify anyone, no hidden HTML comments
+          // (instructions for the next agent that reads them), no control
+          // characters, and no line a workflow log would read as a command.
+          function sanitize(text) {
+            return text
+              .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+              .replace(/<!--[\s\S]*?(-->|$)/g, "")
+              .replace(/(^|[^\w`])@([A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\/[A-Za-z0-9._-]+)?)/g, "$1`@$2`")
+              .replace(/^(\s*)::/gm, "$1: :");
+          }
+
+          // A glob as a regex: `**` matches across directories, `*` and `?` within one.
+          function globRegex(glob) {
+            let re = "";
+            for (let i = 0; i < glob.length; i++) {
+              const c = glob[i];
+              if (c === "*" && glob[i + 1] === "*") {
+                re += glob[i + 2] === "/" ? "(?:.*/)?" : ".*";
+                i += glob[i + 2] === "/" ? 2 : 1;
+              } else if (c === "*") re += "[^/]*";
+              else if (c === "?") re += "[^/]";
+              else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
             }
+            return new RegExp(`^${re}$`);
+          }
+
+          // Why PATH may not be changed, or null if it may.
+          function pathProblem(p, allowed) {
+            if (p === "" || p.startsWith("/") || p.split("/").some((c) => c === "" || c === "." || c === "..")) {
+              return `path ${JSON.stringify(p)} is not a plain relative path`;
+            }
+            if (DENIED_PATHS.some((re) => re.test(p))) return `path ${JSON.stringify(p)} may never be changed`;
+            if (!allowed.some((g) => globRegex(g).test(p))) return `path ${JSON.stringify(p)} is outside the allowed paths`;
+            return null;
+          }
+
+          // Unquotes a path from a git patch header (git quotes unusual names).
+          function headerPath(s) {
+            if (s.startsWith('"')) throw new Error("quoted path names aren't allowed");
+            return s;
+          }
+
+          // Checks PATCH, a `git diff` of text files, against CFG (the
+          // create_pull_request config). Returns the paths it changes, or throws
+          // with the reason it's refused.
+          function checkPatch(patch, cfg) {
+            if (Buffer.byteLength(patch) > cfg.max_patch_bytes) throw new Error(`patch is over ${cfg.max_patch_bytes} bytes`);
+            const paths = new Set();
+            let files = 0;
+            for (const line of patch.split("\n")) {
+              let m;
+              if ((m = /^diff --git a\/(.+) b\/(.+)$/.exec(line))) {
+                files++;
+                paths.add(headerPath(m[1]));
+                paths.add(headerPath(m[2]));
+              } else if ((m = /^(?:---|\+\+\+) (?:[ab]\/(.+)|\/dev\/null)$/.exec(line))) {
+                if (m[1] !== undefined) paths.add(headerPath(m[1]));
+              } else if ((m = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line))) {
+                paths.add(headerPath(m[1]));
+              } else if (/^(?:new file |deleted file |old |new )?mode (\d+)$/.exec(line)) {
+                const mode = line.split(" ").at(-1);
+                if (mode !== "100644" && mode !== "100755") throw new Error(`file mode ${mode} (a symlink or submodule) isn't allowed`);
+              } else if (/^(?:GIT binary patch|Binary files )/.test(line)) {
+                throw new Error("binary patches aren't allowed");
+              } else if (/^(?:---|\+\+\+) /.test(line) && files === 0) {
+                throw new Error("not a git diff");
+              }
+            }
+            if (files === 0) throw new Error("not a git diff (no `diff --git` header)");
+            if (files > cfg.max_files) throw new Error(`patch changes ${files} files, over ${cfg.max_files}`);
+            for (const p of paths) {
+              const why = pathProblem(p, cfg.allowed_paths);
+              if (why) throw new Error(why);
+            }
+            return [...paths].sort();
+          }
+
+          // Why proposal P is refused under CONFIG, or null. Doesn't count caps.
+          function checkProposal(p, config) {
+            if (p === null || typeof p !== "object" || Array.isArray(p)) return "not a JSON object";
+            const fields = FIELDS[p.type];
+            const cfg = config.types[p.type];
+            if (!fields || !cfg) return `type ${JSON.stringify(String(p.type))} is not enabled`;
+            for (const k of Object.keys(p)) {
+              if (k !== "type" && !fields.required.includes(k) && !fields.optional.includes(k)) return `unknown field ${JSON.stringify(k)}`;
+            }
+            for (const k of fields.required) if (typeof p[k] !== "string" || p[k].trim() === "") return `${k} must be a non-empty string`;
+            for (const [re, what] of SECRET_PATTERNS) {
+              if (Object.values(p).some((v) => typeof v === "string" && re.test(v))) return `threat detection: looks like a ${what}`;
+            }
+            if (p.repo !== undefined && p.repo !== config.repo) return `repo ${JSON.stringify(String(p.repo))} is not ${config.repo}`;
+            if (p.type === "add_comment") {
+              const target = p.item_number ?? cfg.targets[0];
+              if (!Number.isInteger(target) || !cfg.targets.includes(target)) {
+                return `target ${JSON.stringify(target)} is not in the allowed targets [${cfg.targets.join(", ")}]`;
+              }
+              if (Buffer.byteLength(p.body) > cfg.max_body_bytes) return `body is over ${cfg.max_body_bytes} bytes`;
+            } else if (p.type === "create_pull_request") {
+              if (Buffer.byteLength(p.title) > 256) return "title is over 256 bytes";
+              if (Buffer.byteLength(p.body) > cfg.max_body_bytes) return `body is over ${cfg.max_body_bytes} bytes`;
+              try {
+                checkPatch(p.patch, cfg);
+              } catch (e) {
+                return e.message;
+              }
+            } else if (Buffer.byteLength(p.message) > 1000) {
+              return "message is over 1000 bytes";
+            }
+            return null;
+          }
+
+          // The output to apply for an accepted proposal: only the fields the
+          // apply step uses, with text sanitized.
+          function normalize(p, config) {
+            switch (p.type) {
+              case "add_comment":
+                return { type: p.type, item_number: p.item_number ?? config.types.add_comment.targets[0], body: sanitize(p.body) };
+              case "create_pull_request":
+                return { type: p.type, title: sanitize(p.title).replace(/\n/g, " "), body: sanitize(p.body), patch: p.patch };
+              default:
+                return { type: p.type, message: sanitize(p.message) };
+            }
+          }
+
+          // Sorts PROPOSALS (parsed JSON values, or {error} for lines that weren't)
+          // into accepted outputs and rejections, with the caps applied in order.
+          function sortProposals(proposals, config) {
+            const accepted = [];
+            const rejected = [];
+            const counts = {};
+            proposals.forEach((p, i) => {
+              const reject = (reason) =>
+                rejected.push({ line: i + 1, type: String(p?.type ?? "?").slice(0, 40), reason: reason.slice(0, MAX_REASON) });
+              if (i >= MAX_LINES) return reject(`over the cap of ${MAX_LINES} proposals`);
+              if (p?.error !== undefined && Object.keys(p).length === 1) return reject(p.error);
+              const why = checkProposal(p, config);
+              if (why) return reject(why);
+              const max = config.types[p.type].max;
+              if ((counts[p.type] ?? 0) >= max) return reject(`over the cap of ${max} ${p.type} per run`);
+              if (accepted.length >= config.max_total) return reject(`over the cap of ${config.max_total} outputs per run`);
+              counts[p.type] = (counts[p.type] ?? 0) + 1;
+              accepted.push(normalize(p, config));
+            });
+            return { accepted, rejected };
+          }
+
+          // Parses JSONL TEXT into proposals for sortProposals.
+          function parseLines(text) {
+            return text
+              .split("\n")
+              .filter((l) => l.trim() !== "")
+              .map((l) => {
+                if (Buffer.byteLength(l) > MAX_LINE_BYTES) return { error: `line is over ${MAX_LINE_BYTES} bytes` };
+                try {
+                  return JSON.parse(l);
+                } catch {
+                  return { error: "not valid JSON" };
+                }
+              });
+          }
+
+          module.exports = { sanitize, globRegex, pathProblem, checkPatch, checkProposal, sortProposals, parseLines, normalize };
+        name: safe-outputs-lib.cjs
+    - name: Share safe-outputs-validate.cjs as /etc/agent-share/safe-outputs-validate.cjs (generated)
+      uses: cgwalters-forge/actions/sandbox-share@f1cc343b8404c22aadbc8c5a7d0923dae4015179
+      with:
+        content: |
+          // Safe outputs, step 1 of 2 (lib/safe-outputs.ncl): sort an agent's
+          // proposals into accepted outputs and rejections, in the apply job's
+          // sandbox, which has no token. The proposals are the agent's data,
+          // downloaded from its job and shared read-only; the config and this
+          // script came from the lock file. The result is staged for
+          // safe-outputs-apply.cjs, which checks it all again.
+          //
+          // Usage: node safe-outputs-validate.cjs LIB CONFIG PROPOSALS_DIR OUT_DIR
+          "use strict";
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const PROPOSALS_FILE = "outputs.jsonl";
+          const MAX_FILE_BYTES = 4 * 1024 * 1024;
+
+          // The proposals file, wherever the artifact and the share nested it, a
+          // few directories down at most, and never through a symlink.
+          function findProposals(dir, depth = 3) {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            const file = entries.find((e) => e.isFile() && e.name === PROPOSALS_FILE);
+            if (file) return path.join(dir, file.name);
             if (depth === 0) return null;
-            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-              if (!e.isDirectory()) continue;
-              const found = findProposals(path.join(dir, e.name), depth - 1);
+            for (const e of entries) {
+              const found = e.isDirectory() ? findProposals(path.join(dir, e.name), depth - 1) : null;
               if (found) return found;
             }
             return null;
           }
 
-          // gh-aw's sanitize_content, the parts that matter for a comment: no
-          // @mentions that would notify anyone, no hidden HTML comments, no
-          // control characters, and no line that a workflow log would read as a
-          // command.
-          function sanitize(text) {
-            return text
-              .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
-              .replace(/<!--[\s\S]*?-->/g, "")
-              .replace(/(^|[^\w`])@([A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\/[A-Za-z0-9._-]+)?)/g, "$1`@$2`")
-              .replace(/^::/gm, ": :");
-          }
-
-          function checkProposal(p, config, repo) {
-            if (p === null || typeof p !== "object" || Array.isArray(p)) return "not a JSON object";
-            const spec = TYPES[p.type];
-            const allowed = config.types[p.type];
-            if (!spec || !allowed) return `type ${JSON.stringify(String(p.type))} is not enabled`;
-            for (const k of Object.keys(p)) {
-              if (k !== "type" && !spec.required.includes(k) && !spec.optional.includes(k)) return `unknown field ${JSON.stringify(k)}`;
-            }
-            for (const k of spec.required) if (typeof p[k] !== "string" || p[k].trim() === "") return `${k} must be a non-empty string`;
-            for (const [re, what] of SECRET_PATTERNS) {
-              if (Object.values(p).some((v) => typeof v === "string" && re.test(v))) return `threat detection: looks like a ${what}`;
-            }
-            if (p.type === "add_comment") {
-              if (p.repo !== undefined && p.repo !== repo) return `repo ${JSON.stringify(String(p.repo))} is not ${repo}`;
-              const target = p.item_number ?? config.types.add_comment.default_target;
-              if (!Number.isInteger(target) || !allowed.targets.includes(target)) {
-                return `target ${JSON.stringify(target)} is not in the allowed targets [${allowed.targets.join(", ")}]`;
-              }
-              if (Buffer.byteLength(p.body) > allowed.max_body_bytes) return `body is over ${allowed.max_body_bytes} bytes`;
-            }
-            return null;
-          }
-
           function main() {
-            const [configPath, dir, outDir] = process.argv.slice(2);
-            if (!configPath || !dir || !outDir) throw new Error("usage: validate.cjs CONFIG PROPOSALS_DIR OUT_DIR");
+            const [libPath, configPath, dir, outDir] = process.argv.slice(2);
+            if (!outDir) throw new Error("usage: safe-outputs-validate.cjs LIB CONFIG PROPOSALS_DIR OUT_DIR");
+            const lib = require(libPath);
             const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-            const repo = config.repo;
-            const accepted = [];
-            const rejected = [];
-            const counts = {};
             const file = findProposals(dir);
-            if (!file) throw new Error(`no ${PROPOSALS_FILE} in ${dir}`);
-            if (fs.statSync(file).size > MAX_FILE_BYTES) throw new Error(`${PROPOSALS_FILE} is over ${MAX_FILE_BYTES} bytes`);
-            const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim() !== "");
-            lines.forEach((line, i) => {
-              const n = i + 1;
-              const reject = (type, reason) => rejected.push({ line: n, type: String(type ?? "?").slice(0, 40), reason: reason.slice(0, MAX_REASON) });
-              if (n > MAX_LINES) return reject(null, `over the cap of ${MAX_LINES} proposals`);
-              if (Buffer.byteLength(line) > MAX_LINE_BYTES) return reject(null, `line is over ${MAX_LINE_BYTES} bytes`);
-              let p;
-              try {
-                p = JSON.parse(line);
-              } catch {
-                return reject(null, "not valid JSON");
-              }
-              const why = checkProposal(p, config, repo);
-              if (why) return reject(p?.type, why);
-              const max = config.types[p.type].max;
-              if ((counts[p.type] ?? 0) >= max) return reject(p.type, `over the cap of ${max} ${p.type} per run`);
-              if (accepted.length >= config.max_total) return reject(p.type, `over the cap of ${config.max_total} outputs per run`);
-              counts[p.type] = (counts[p.type] ?? 0) + 1;
-              if (p.type === "add_comment") {
-                accepted.push({ type: p.type, item_number: p.item_number ?? config.types.add_comment.default_target, body: sanitize(p.body) });
-              } else {
-                accepted.push({ type: p.type, message: sanitize(p.message).slice(0, 500) });
-              }
-            });
+            let result;
+            if (!file) {
+              result = { accepted: [], rejected: [{ line: 0, type: "?", reason: `the agent left no ${PROPOSALS_FILE}` }] };
+            } else if (fs.statSync(file).size > MAX_FILE_BYTES) {
+              result = { accepted: [], rejected: [{ line: 0, type: "?", reason: `${PROPOSALS_FILE} is over ${MAX_FILE_BYTES} bytes` }] };
+            } else {
+              result = lib.sortProposals(lib.parseLines(fs.readFileSync(file, "utf8")), config);
+            }
             fs.mkdirSync(outDir, { recursive: true });
-            fs.writeFileSync(path.join(outDir, "validated.json"), `${JSON.stringify({ accepted, rejected }, null, 2)}\n`);
-            console.log(`${lines.length} proposals: ${accepted.length} accepted, ${rejected.length} rejected`);
-            for (const r of rejected) console.log(`rejected line ${r.line} (${r.type}): ${r.reason}`);
+            fs.writeFileSync(path.join(outDir, "validated.json"), `${JSON.stringify(result, null, 2)}\n`);
+            console.log(`${result.accepted.length} accepted, ${result.rejected.length} rejected`);
+            for (const r of result.rejected) console.log(`rejected line ${r.line} (${r.type}): ${r.reason}`);
           }
 
           try {
             main();
           } catch (e) {
-            console.error(`validate: ${e.message}`);
+            console.error(`safe-outputs-validate: ${e.message}`);
             process.exit(1);
           }
-        name: validate.cjs
-    - name: Share apply.cjs as /etc/agent-share/apply.cjs (generated)
+        name: safe-outputs-validate.cjs
+    - name: Share safe-outputs-apply.cjs as /etc/agent-share/safe-outputs-apply.cjs (generated)
       uses: cgwalters-forge/actions/sandbox-share@f1cc343b8404c22aadbc8c5a7d0923dae4015179
       with:
         content: |
-          // Safe outputs, step 2 of 2: apply what validate.cjs accepted.
+          // Safe outputs, step 2 of 2 (lib/safe-outputs.ncl): apply what
+          // safe-outputs-validate.cjs accepted. Runs in the apply job's publish
+          // phase, as runner with the job's token, which has only the permissions
+          // the enabled output types need. Its input was written in the sandbox,
+          // so it is checked again here, every proposal with the same checks and
+          // the same caps, and its text sanitized again, before anything is
+          // written; one that fails refuses the whole run.
           //
-          // Runs in the apply job's publish phase, as runner with the job's token
-          // (issues: write and nothing else). Its input was written in the sandbox,
-          // so it is not trusted either: the hard limits (types, targets, sizes,
-          // counts, secrets) are checked again here against the config the
-          // privileged phase shared, and anything outside them fails the job
-          // before a single write.
-          //
-          // Usage: node apply.cjs CONFIG VALIDATED_JSON
+          // Usage: node safe-outputs-apply.cjs LIB CONFIG VALIDATED_JSON
           "use strict";
           const fs = require("node:fs");
+          const os = require("node:os");
+          const path = require("node:path");
+          const { spawnSync } = require("node:child_process");
 
           const env = process.env;
           const API = env.GITHUB_API_URL ?? "https://api.github.com";
-          const SECRET_RE = /\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_|\bpraxis-run-|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+          const BOT = { name: "github-actions[bot]", email: "41898282+github-actions[bot]@users.noreply.github.com" };
+          // Git as the publish phase runs it on a patch from the sandbox: a fresh
+          // repository with no hooks, no fsmonitor and no local transports.
+          const GIT_CONFIG = ["core.hooksPath=/dev/null", "core.fsmonitor=false", "protocol.file.allow=never", "commit.gpgSign=false"];
+          const ALLOWED_MODES = new Set(["000000", "100644", "100755"]);
+
+          // What this step prints can quote the sandbox's text (git's errors quote
+          // the patch), and runs with the job's token: no workflow commands in it.
+          const unc = (s) => String(s).replace(/^(\s*)::/gm, "$1: :").replaceAll("##[", "## [");
 
           function fail(message) {
-            console.error(`apply: ${message}`);
+            console.error(unc(`safe-outputs-apply: ${message}`));
             process.exit(1);
           }
 
-          // Text from the sandbox, shown in Markdown as code and on one line.
+          // Text from the sandbox, shown in Markdown as code on one line.
           const code = (s) => `\`${String(s).replace(/[`\r\n]/g, " ").slice(0, 200)}\``;
 
-          function recheck(accepted, config) {
-            if (!Array.isArray(accepted)) fail("accepted is not an array");
-            if (accepted.length > config.max_total) fail(`${accepted.length} outputs is over the cap of ${config.max_total}`);
-            const counts = {};
-            for (const o of accepted) {
-              const allowed = config.types[o?.type];
-              if (!allowed) fail(`type ${code(o?.type)} is not enabled`);
-              counts[o.type] = (counts[o.type] ?? 0) + 1;
-              if (counts[o.type] > allowed.max) fail(`more than ${allowed.max} ${o.type}`);
-              if (o.type === "add_comment") {
-                if (!allowed.targets.includes(o.item_number)) fail(`target ${code(o.item_number)} is not allowed`);
-                if (typeof o.body !== "string" || Buffer.byteLength(o.body) > allowed.max_body_bytes) fail("bad comment body");
-                if (SECRET_RE.test(o.body)) fail("comment body looks like it holds a secret");
-              }
-            }
+          function footer(repo) {
+            const run = `${env.GITHUB_SERVER_URL}/${repo}/actions/runs/${env.GITHUB_RUN_ID}`;
+            return `\n\n---\nProposed by an agent in [run ${env.GITHUB_RUN_ID}](${run}); checked and applied by its safe-outputs job.`;
           }
 
-          async function addComment(repo, number, body) {
-            const footer = `\n\n---\nProposed by the agent in [run ${env.GITHUB_RUN_ID}](${env.GITHUB_SERVER_URL}/${repo}/actions/runs/${env.GITHUB_RUN_ID}), validated and applied by its \`apply\` job.`;
-            const res = await fetch(`${API}/repos/${repo}/issues/${number}/comments`, {
-              method: "POST",
+          async function api(method, url, body) {
+            const res = await fetch(`${API}${url}`, {
+              method,
               headers: {
                 authorization: `Bearer ${env.GITHUB_TOKEN}`,
                 accept: "application/vnd.github+json",
                 "x-github-api-version": "2022-11-28",
                 "content-type": "application/json",
               },
-              body: JSON.stringify({ body: body + footer }),
+              body: JSON.stringify(body),
             });
-            if (!res.ok) fail(`commenting on #${number} failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
-            return (await res.json()).html_url;
+            const text = await res.text();
+            if (!res.ok) throw new Error(`${method} ${url}: ${res.status} ${text.slice(0, 300)}`);
+            return JSON.parse(text);
+          }
+
+          // The accepted outputs, checked again from scratch.
+          function recheck(lib, config, validated) {
+            if (!Array.isArray(validated?.accepted)) fail("validated.json has no accepted list");
+            const { accepted, rejected } = lib.sortProposals(validated.accepted, config);
+            if (rejected.length) fail(`the sandbox accepted outputs that fail the checks: ${rejected.map((r) => r.reason).join("; ")}`);
+            // Sanitizing twice changes nothing, so this only differs if the sandbox
+            // passed on text it didn't sanitize.
+            return accepted;
+          }
+
+          function git(cwd, args, extra = {}) {
+            const r = spawnSync("git", [...GIT_CONFIG.flatMap((c) => ["-c", c]), ...args], {
+              cwd, encoding: "utf8", input: extra.input, env: { ...extra.env, PATH: env.PATH, HOME: extra.home },
+            });
+            if (r.status !== 0) throw new Error(`git ${args[0]}: ${(r.stderr || r.stdout).trim().slice(0, 500)}`);
+            return r.stdout;
+          }
+
+          async function createPullRequest(lib, config, o, n) {
+            const cfg = config.types.create_pull_request;
+            const work = fs.mkdtempSync(path.join(env.RUNNER_TEMP ?? os.tmpdir(), "safe-outputs-pr-"));
+            const home = path.join(work, "home");
+            const dir = path.join(work, "repo");
+            fs.mkdirSync(home);
+            // The token goes to git in its environment, never on a command line or
+            // in a file.
+            const auth = Buffer.from(`x-access-token:${env.GITHUB_TOKEN}`).toString("base64");
+            const gitEnv = {
+              GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_COUNT: "1",
+              GIT_CONFIG_KEY_0: `http.${env.GITHUB_SERVER_URL}/.extraheader`, GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${auth}`,
+              GIT_AUTHOR_NAME: BOT.name, GIT_AUTHOR_EMAIL: BOT.email, GIT_COMMITTER_NAME: BOT.name, GIT_COMMITTER_EMAIL: BOT.email,
+            };
+            const run = (args, input) => git(dir, args, { env: gitEnv, home, input });
+            const url = `${env.GITHUB_SERVER_URL}/${config.repo}`;
+            const branch = `${cfg.branch_prefix}${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT ?? 1}-${n}`;
+            git(work, ["init", "-q", dir], { env: gitEnv, home });
+            run(["fetch", "-q", "--depth=1", "--no-tags", url, `refs/heads/${cfg.base}`]);
+            run(["checkout", "-q", "-b", branch, "FETCH_HEAD"]);
+            // A diff taken through a shell's $(...) loses its last newline, which
+            // git apply needs.
+            run(["apply", "--index", "--whitespace=nowarn", "-"], o.patch.endsWith("\n") ? o.patch : `${o.patch}\n`);
+            // What git changed, as git sees it, against the same rules as the
+            // patch's own headers.
+            const raw = run(["diff", "--cached", "--raw", "--no-renames", "-z"]).split("\0").filter(Boolean);
+            if (raw.length === 0) throw new Error("the patch changes nothing");
+            for (let i = 0; i < raw.length; i += 2) {
+              const [oldMode, newMode] = raw[i].slice(1).split(" ");
+              const file = raw[i + 1];
+              if (!ALLOWED_MODES.has(oldMode) || !ALLOWED_MODES.has(newMode)) throw new Error(`${file}: mode ${newMode} isn't allowed`);
+              const why = lib.pathProblem(file, cfg.allowed_paths);
+              if (why) throw new Error(why);
+            }
+            if (raw.length / 2 > cfg.max_files) throw new Error(`the patch changes more than ${cfg.max_files} files`);
+            run(["commit", "-q", "-F", "-"], `${o.title}\n\n${o.body}${footer(config.repo)}\n`);
+            run(["push", "-q", url, `HEAD:refs/heads/${branch}`]);
+            try {
+              const pr = await api("POST", `/repos/${config.repo}/pulls`, {
+                title: o.title, head: branch, base: cfg.base, body: o.body + footer(config.repo), draft: cfg.draft,
+              });
+              return pr.html_url;
+            } catch (e) {
+              throw new Error(`pushed ${branch}, but opening the pull request failed (${e.message}); open it from ${url}/compare/${cfg.base}...${branch}`);
+            }
           }
 
           async function main() {
-            const [configPath, validatedPath] = process.argv.slice(2);
-            if (!configPath || !validatedPath) fail("usage: apply.cjs CONFIG VALIDATED_JSON");
+            const [libPath, configPath, validatedPath] = process.argv.slice(2);
+            if (!validatedPath) fail("usage: safe-outputs-apply.cjs LIB CONFIG VALIDATED_JSON");
             for (const name of ["GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_SERVER_URL"]) {
               if (!env[name]) fail(`${name} is not set`);
             }
+            const lib = require(libPath);
             const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-            if (config.repo !== env.GITHUB_REPOSITORY) fail(`config is for ${config.repo}, not ${env.GITHUB_REPOSITORY}`);
-            const { accepted, rejected } = JSON.parse(fs.readFileSync(validatedPath, "utf8"));
-            recheck(accepted, config);
+            if (config.repo !== env.GITHUB_REPOSITORY) fail(`the config is for ${config.repo}, not ${env.GITHUB_REPOSITORY}`);
+            const validated = JSON.parse(fs.readFileSync(validatedPath, "utf8"));
+            const accepted = recheck(lib, config, validated);
 
             const summary = ["## Safe outputs", ""];
+            const errors = [];
+            let n = 0;
             for (const o of accepted) {
-              if (o.type === "add_comment") {
-                const url = await addComment(config.repo, o.item_number, o.body);
-                console.log(`applied add_comment: ${url}`);
-                summary.push(`- applied \`add_comment\` on #${o.item_number}: ${url}`);
-              } else {
-                summary.push(`- \`noop\`: ${code(o.message)}`);
+              try {
+                if (o.type === "add_comment") {
+                  const c = await api("POST", `/repos/${config.repo}/issues/${o.item_number}/comments`, { body: o.body + footer(config.repo) });
+                  summary.push(`- applied \`add_comment\` on #${o.item_number}: ${c.html_url}`);
+                } else if (o.type === "create_pull_request") {
+                  summary.push(`- applied \`create_pull_request\`: ${await createPullRequest(lib, config, o, ++n)}`);
+                } else {
+                  summary.push(`- \`noop\`: ${code(o.message)}`);
+                }
+                console.log(unc(summary.at(-1).slice(2)));
+              } catch (e) {
+                errors.push(`${o.type}: ${e.message}`);
+                summary.push(`- **failed** \`${o.type}\`: ${code(e.message)}`);
               }
             }
-            for (const r of Array.isArray(rejected) ? rejected : []) {
-              summary.push(`- **rejected** line ${code(r?.line)} ${code(r?.type)}: ${code(r?.reason)}`);
-            }
+            const rejected = Array.isArray(validated.rejected) ? validated.rejected : [];
+            for (const r of rejected) summary.push(`- **rejected** line ${code(r?.line)} ${code(r?.type)}: ${code(r?.reason)}`);
             if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary.join("\n")}\n`);
-            console.log(`${accepted.length} applied, ${Array.isArray(rejected) ? rejected.length : 0} rejected`);
+            console.log(`${accepted.length - errors.length} applied, ${errors.length} failed, ${rejected.length} rejected`);
+            if (errors.length) fail(errors.join("\n"));
           }
 
           main().catch((e) => fail(e.message));
-        name: apply.cjs
+        name: safe-outputs-apply.cjs
     - name: Secure the host (generated)
       run: |
         // The compiler-generated "secure the host" step, run as root (`sudo node`)
@@ -1861,7 +2092,7 @@ jobs:
           const fs = require("node:fs");
           const crypto = require("node:crypto");
           const { spawnSync } = require("node:child_process");
-          const { parse, format, neutralize } = require("/usr/local/libexec/runner-sandbox-filecmd.cjs");
+          const { parse, format, neutralize, allowedCommands } = require("/usr/local/libexec/runner-sandbox-filecmd.cjs");
 
           const RUN = "/usr/local/libexec/runner-sandbox-run";
           const SUDO = "/usr/bin/sudo";
@@ -1872,10 +2103,15 @@ jobs:
           ];
           const USAGE = "usage: runner-sandbox-exec SCRIPT | --action SPEC | --action-path USES SCRIPT | --stage NAME PATH | --seal";
 
+          // Set to 0 by the compiler for a step whose output may hold no
+          // annotations (filecmd.cjs), such as an agent's.
+          const annotations = process.env.RUNNER_SANDBOX_ANNOTATIONS !== "0";
+
           // MESSAGE can quote what the sandbox wrote, so its lines go through the
           // same filter as the sandbox's own output.
           function fail(message) {
-            console.error(String(message).split(/\r\n|\r|\n/).map((l) => neutralize(`runner-sandbox-exec: ${l}`)).join("\n"));
+            const allowed = allowedCommands(annotations);
+            console.error(String(message).split(/\r\n|\r|\n/).map((l) => neutralize(`runner-sandbox-exec: ${l}`, true, allowed)).join("\n"));
             process.exit(125);
           }
 
@@ -1919,6 +2155,7 @@ jobs:
             default:
               request = { id, script: fs.readFileSync(args[0], "utf8"), env };
           }
+          request.annotations = annotations;
           // By absolute path: the step's own env: applies to this process.
           const r = spawnSync(SUDO, ["-n", RUN], { input: JSON.stringify(request), stdio: ["pipe", "inherit", "inherit"] });
           if (r.error) fail(`running ${RUN}: ${r.error.message}`);
@@ -1963,7 +2200,10 @@ jobs:
           // the sandbox's, so CommandFilter neutralizes every command in it except
           // the annotations linters report with (`warning`, `error`, `notice`),
           // `debug`, and `group`/`endgroup`, which fold the log: they only show
-          // text. The others would set outputs or state
+          // text. A step whose output isn't a linter's but an agent's, which a
+          // prompt can steer, gets no annotations either (`annotations: false`):
+          // they would put its text on the run and on pull requests' checks. The
+          // others would set outputs or state
           // behind the file commands' checks (`set-output`, `save-state`), change
           // the runner's environment, PATH or problem matchers, mask text in later
           // steps' logs, or stop command processing for the steps after it.
@@ -2016,7 +2256,12 @@ jobs:
             return `${name}<<${delimiter}\n${value}\n${delimiter}\n`;
           }
 
-          const ALLOWED_COMMANDS = new Set(["warning", "error", "notice", "debug", "group", "endgroup"]);
+          const TEXT_COMMANDS = ["debug", "group", "endgroup"];
+          const ANNOTATIONS = ["warning", "error", "notice"];
+          const ALLOWED_COMMANDS = new Set([...ANNOTATIONS, ...TEXT_COMMANDS]);
+          const ALLOWED_NO_ANNOTATIONS = new Set(TEXT_COMMANDS);
+          // The commands a step's output may use.
+          const allowedCommands = (annotations) => (annotations ? ALLOWED_COMMANDS : ALLOWED_NO_ANNOTATIONS);
           const LEGACY_PREFIX = "##[";
           const NEUTRALIZED_LEGACY = "## [";
           const MARK = "[sandbox] ";
@@ -2025,21 +2270,23 @@ jobs:
 
           // LINE, one line of a sandboxed step's output, with its commands
           // neutralized. AT_START is false for the rest of a line whose start was
-          // already passed on.
-          function neutralize(line, atStart = true) {
+          // already passed on. ALLOWED is the set of commands left as they are.
+          function neutralize(line, atStart = true, allowed = ALLOWED_COMMANDS) {
             const out = line.replaceAll(LEGACY_PREFIX, NEUTRALIZED_LEGACY);
             if (!atStart) return out;
             // The runner trims what .NET calls whitespace, which includes U+0085.
             const m = /^([\s\u0085]*)::([^\s\u0085:]*)/.exec(out);
-            if (!m || ALLOWED_COMMANDS.has(m[2].toLowerCase())) return out;
+            if (!m || allowed.has(m[2].toLowerCase())) return out;
             return `${m[1]}${MARK}${out.slice(m[1].length)}`;
           }
 
           // Filters a stream of a sandboxed step's output: push() chunks as they
           // come, and end() at the end; both return what to pass on. Lines end
-          // where the runner's reader ends them, at \n, \r or \r\n.
+          // where the runner's reader ends them, at \n, \r or \r\n. ANNOTATIONS
+          // false neutralizes annotations too.
           class CommandFilter {
-            constructor() {
+            constructor({ annotations = true } = {}) {
+              this.allowed = allowedCommands(annotations);
               this.decoder = new StringDecoder("utf8");
               this.held = "";
               this.atStart = true;
@@ -2052,14 +2299,14 @@ jobs:
                 const m = /\r\n|\r|\n/.exec(this.held);
                 // A \r at the end may be the start of \r\n.
                 if (!m || (m[0] === "\r" && m.index === this.held.length - 1)) break;
-                out += neutralize(this.held.slice(0, m.index), this.atStart) + m[0];
+                out += neutralize(this.held.slice(0, m.index), this.atStart, this.allowed) + m[0];
                 this.held = this.held.slice(m.index + m[0].length);
                 this.atStart = true;
               }
               if (this.held.length > MAX_HELD) {
                 // Keep the last two characters: they may begin a "##[".
                 const keep = this.held.slice(-2);
-                out += neutralize(this.held.slice(0, -2), this.atStart);
+                out += neutralize(this.held.slice(0, -2), this.atStart, this.allowed);
                 this.held = keep;
                 this.atStart = false;
               }
@@ -2069,11 +2316,11 @@ jobs:
             end() {
               const rest = this.held + this.decoder.end();
               this.held = "";
-              return rest === "" ? "" : neutralize(rest, this.atStart);
+              return rest === "" ? "" : neutralize(rest, this.atStart, this.allowed);
             }
           }
 
-          module.exports = { parse, format, NAME_RE, neutralize, CommandFilter };
+          module.exports = { parse, format, NAME_RE, neutralize, allowedCommands, CommandFilter };
         RUNNER_SANDBOX_HANDOFF_JS: |
           // The workspace hand-off: what the enter step copies from the runner's
           // workspace into the sandbox's. install.cjs loads it (the compiler passes
@@ -2432,6 +2679,7 @@ jobs:
             fail(`invalid request: ${e.message}`);
           }
           if (!/^[0-9a-f]{32}$/.test(req.id ?? "")) fail("invalid step id");
+          if (req.annotations !== undefined && typeof req.annotations !== "boolean") fail("invalid annotations");
           if (typeof req.script !== "string" && typeof req.action !== "object" && typeof req.stage !== "object" && req.seal !== true) fail("missing script");
           const env = req.env ?? {};
           // The environment reaches the step through a file (see LAUNCHER), so
@@ -2669,7 +2917,7 @@ jobs:
               const child = spawn("run0", args, { stdio: ["pipe", "pipe", "pipe"] });
               child.stdin.end();
               for (const [from, to] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
-                const filter = new CommandFilter();
+                const filter = new CommandFilter({ annotations: req.annotations !== false });
                 from.on("data", (chunk) => to.write(filter.push(chunk)));
                 from.on("end", () => to.write(filter.end()));
               }
@@ -2878,8 +3126,8 @@ jobs:
         console.log(`Entered the sandbox: later run steps execute as ${user} (uid ${sandbox.uid}) in ${WORKDIR}`);
         console.log(run("sudo", ["-l", "-U", runner]).stdout);
       shell: sudo --preserve-env=RUNNER_SANDBOX_EXEC_JS,RUNNER_SANDBOX_RUN_JS,RUNNER_SANDBOX_HANDOFF_JS,RUNNER_SANDBOX_FILECMD_JS,RUNNER_SANDBOX_LAUNCH_JS node {0}
-    - name: Validate the proposals
-      run: node /etc/agent-share/validate.cjs /etc/agent-share/safe-outputs-config.json /etc/agent-share/proposals validated
+    - name: Check the proposals
+      run: node /etc/agent-share/safe-outputs-validate.cjs /etc/agent-share/safe-outputs-lib.cjs /etc/agent-share/safe-outputs-config.json /etc/agent-share/safe-outputs-proposals validated
       shell: /usr/local/bin/runner-sandbox-exec {0}
     - id: stage-safe-outputs-validated
       name: Stage validated as safe-outputs-validated (generated)
@@ -2900,8 +3148,8 @@ jobs:
     - env:
         GITHUB_TOKEN: ${{ github.token }}
       if: (success()) && steps.runner-sandbox-seal.outcome == 'success'
-      name: Apply the validated outputs
-      run: node /etc/agent-share/apply.cjs /etc/agent-share/safe-outputs-config.json /run/runner-sandbox/staged/safe-outputs-validated/validated/validated.json
+      name: Check and apply the outputs
+      run: node /etc/agent-share/safe-outputs-apply.cjs /etc/agent-share/safe-outputs-lib.cjs /etc/agent-share/safe-outputs-config.json /run/runner-sandbox/staged/safe-outputs-validated/validated/validated.json
     timeout-minutes: 10
 name: Safe outputs demo
 on:
