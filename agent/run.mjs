@@ -30,6 +30,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Built by the workflow (cargo build --release -p bot-harness).
 const HARNESS_BIN = join(ROOT, "target/release/bot-harness");
 const HARNESS_DIR = join(ROOT, "harness");
+const SOCKET_STDIO = join(ROOT, "scripts/socket-stdio.mjs");
 // The files bot-harness run writes, which go into the transcript.
 const HARNESS_FILES = ["acp.jsonl", "agent-stderr.log", "harness.json"];
 // The agents that run without inference, which is all there is for now.
@@ -77,7 +78,8 @@ function validate() {
 async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, promptFile }) {
   writeFileSync(promptFile, `${env.BRIEF}\n`);
   // The agent runs as runner-sandbox, in a session of its own; bot-harness
-  // appends its command to this.
+  // appends its command to this. bot-harness gives it pipes, which run0
+  // can't hand to PID 1 from this service (see socket-stdio.mjs).
   const [sudo, wrapper] = agentCommand([], { cwd: workdir });
   const limit = Number(env.TIMEOUT_MINUTES) * 60 + HARNESS_GRACE_S;
   const harness = spawn("timeout", ["--kill-after=30", `${limit}s`, HARNESS_BIN, "run",
@@ -85,7 +87,7 @@ async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, p
     "--cwd", workdir, "--prompt", promptFile, "--out", harnessOut,
     "--permissions", join(HARNESS_DIR, "policy.toml"),
     "--timeout", `${env.TIMEOUT_MINUTES}m`, "--budget-aic", env.BUDGET,
-    "--", sudo, ...wrapper], { stdio: ["ignore", "pipe", openSync(stderrLog, "w")] });
+    "--", process.execPath, SOCKET_STDIO, sudo, ...wrapper], { stdio: ["ignore", "pipe", openSync(stderrLog, "w")] });
   const closed = new Promise((resolve) => harness.on("close", (code) => resolve(code ?? 128)));
   const condensedOut = createWriteStream(condensed);
   // bot-harness keeps each line to one line of text; redact and check

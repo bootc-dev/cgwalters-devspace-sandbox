@@ -33,8 +33,9 @@ export function run(cmd, args, { input } = {}) {
 // runs in that session's scope, under user-UID.slice. Unlike machinectl
 // shell, which always allocates a pty, stdio stays pipes (binary safe,
 // stderr apart, EOF on stdin) and the exit status comes back. They must be
-// pipes, not regular files: run0 hands them to PID 1 over D-Bus, which
-// refuses those.
+// sockets: run0 hands them to PID 1 over D-Bus, which refuses regular
+// files, and SELinux keeps PID 1 from reading a pipe this service made.
+// spawnSync's 'pipe' stdio is a socketpair; elsewhere, scripts/socket-stdio.mjs.
 export function sandboxCommand(cmd, { cwd = SANDBOX_HOME, env = {} } = {}) {
   const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, ...env };
   // Unlike systemd-run --collect, run0 leaves a failed unit behind for
