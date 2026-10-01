@@ -5,6 +5,11 @@ description: |
   engine.command is replaced by a keepalive script; no inference happens.
 
 on:
+  # The push trigger only exists so GitHub registers this workflow from a
+  # non-default branch; the run itself is skipped by the if: below.
+  push:
+    branches: [bot/gh-aw-spike]
+    paths: [.github/workflows/aw-spike.lock.yml]
   workflow_dispatch:
     inputs:
       ssh_public_key:
@@ -16,6 +21,8 @@ on:
         type: choice
         options: ["30", "60"]
         default: "30"
+
+if: github.event_name == 'workflow_dispatch'
 
 permissions:
   contents: read
