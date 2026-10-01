@@ -1,0 +1,22 @@
+#!/bin/bash
+# Spike stand-in for wfc's runner-sandbox-run: run argv as runner-sandbox
+# in its own logind session via run0, with an allowlisted environment.
+set -euo pipefail
+[ "$(id -u)" = 0 ] || exec sudo -n --preserve-env "$0" "$@"
+SBX="runner-sandbox"
+base=/var/lib/runner-sandbox
+args=(--pipe --no-ask-password --user="$SBX" --chdir="$base/work"
+  --property=CollectMode=inactive-or-failed
+  --property=PrivateTmp=yes --property=BindPaths=/tmp/gh-aw
+  --property=InaccessiblePaths=-/home/runner
+  --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  --setenv=RUNNER_TEMP="$base/temp" --setenv=GITHUB_WORKSPACE="$base/work")
+# Pass through gh-aw's agent-step variables, but never the raw API key.
+while IFS='=' read -r k _; do
+  case "$k" in
+    ANTHROPIC_API_KEY|*TOKEN*|*SECRET*) ;;
+    GH_AW_*|GITHUB_AW|ANTHROPIC_*|CLAUDE_*|DISABLE_*|BASH_*_TIMEOUT_MS|MCP_*|GITHUB_STEP_SUMMARY|GITHUB_RUN_ID|GITHUB_REPOSITORY|GIT_AUTHOR_*|GIT_COMMITTER_*)
+      args+=(--setenv="$k=${!k}");;
+  esac
+done < <(env)
+exec run0 "${args[@]}" -- env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_HOME -u SUDO_COMMAND -- "$@"
