@@ -1,5 +1,5 @@
 # gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"792b1c18758d41647dfb3f3e329a7b6b1f0f8760fea50ed116025561fc8c0ebb","body_hash":"b1f933e2aba59c51ca6f0ea2a66d633181e416a918435c7f40f46cb424016715","compiler_version":"dev","agent_id":"claude","engine_versions":{"claude":"2.1.285"},"agent_image_runner":"ubuntu-26.04"}
-# gh-aw-manifest: {"version":1,"secrets":["ANTHROPIC_API_KEY","COPILOT_GITHUB_TOKEN","GH_AW_DEFAULT_OTLP_ENDPOINT","GH_AW_DEFAULT_OTLP_HEADERS","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/setup-node","sha":"820762786026740c76f36085b0efc47a31fe5020","version":"v7.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw/actions/setup","sha":"61c0eba13a1bff2cc7ce7f2681620332f28b6b9e","version":"61c0eba13a1bff2cc7ce7f2681620332f28b6b9e"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.30","digest":"sha256:6294a95f9ca39be1cd6125cebffa9d2ba72a9bfabb8bab2160111788b67ab94d","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.30@sha256:6294a95f9ca39be1cd6125cebffa9d2ba72a9bfabb8bab2160111788b67ab94d"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.27","digest":"sha256:c9474061446b0c6f9958f3ddce83561217f1fa7f82d6058b2cbf1242bac472d0","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.27@sha256:c9474061446b0c6f9958f3ddce83561217f1fa7f82d6058b2cbf1242bac472d0"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f","pinned_image":"ghcr.io/github/gh-aw-node@sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f"},{"image":"ghcr.io/github/github-mcp-server:v1.12.2","digest":"sha256:508a0857ec762b1ab1cece29193345b501fab1dd9d1228a7b617062954cecac6","pinned_image":"ghcr.io/github/github-mcp-server:v1.12.2@sha256:508a0857ec762b1ab1cece29193345b501fab1dd9d1228a7b617062954cecac6"}],"mcp_servers":[{"name":"github","tools":["get_commit","get_file_contents","get_latest_release","get_me","get_pull_request","get_pull_request_comments","get_pull_request_diff","get_pull_request_files","get_pull_request_review_comments","get_pull_request_reviews","get_pull_request_status","get_release_by_tag","get_tag","issue_read","list_branches","list_commits","list_issue_types","list_issues","list_pull_requests","list_releases","list_starred_repositories","list_tags","pull_request_read","search_code","search_issues","search_pull_requests","search_repositories"]},{"name":"safeoutputs","tools":["add_comment","missing_data","missing_tool","noop"]}]}
+# gh-aw-manifest: {"version":1,"secrets":["ANTHROPIC_API_KEY","COPILOT_GITHUB_TOKEN","GH_AW_DEFAULT_OTLP_ENDPOINT","GH_AW_DEFAULT_OTLP_HEADERS","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/setup-node","sha":"820762786026740c76f36085b0efc47a31fe5020","version":"v7.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw/actions/setup","sha":"d5654b7870f30e0d22efdf1f92f3727b6f1dc313","version":"d5654b7870f30e0d22efdf1f92f3727b6f1dc313"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.30","digest":"sha256:6294a95f9ca39be1cd6125cebffa9d2ba72a9bfabb8bab2160111788b67ab94d","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.28.30@sha256:6294a95f9ca39be1cd6125cebffa9d2ba72a9bfabb8bab2160111788b67ab94d"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.27","digest":"sha256:c9474061446b0c6f9958f3ddce83561217f1fa7f82d6058b2cbf1242bac472d0","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.27@sha256:c9474061446b0c6f9958f3ddce83561217f1fa7f82d6058b2cbf1242bac472d0"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f","pinned_image":"ghcr.io/github/gh-aw-node@sha256:11c2c544876cdbaffefe0f7f1283b74838c209654b4934a78e23ed11f750490f"},{"image":"ghcr.io/github/github-mcp-server:v1.12.2","digest":"sha256:508a0857ec762b1ab1cece29193345b501fab1dd9d1228a7b617062954cecac6","pinned_image":"ghcr.io/github/github-mcp-server:v1.12.2@sha256:508a0857ec762b1ab1cece29193345b501fab1dd9d1228a7b617062954cecac6"}],"mcp_servers":[{"name":"github","tools":["get_commit","get_file_contents","get_latest_release","get_me","get_pull_request","get_pull_request_comments","get_pull_request_diff","get_pull_request_files","get_pull_request_review_comments","get_pull_request_reviews","get_pull_request_status","get_release_by_tag","get_tag","issue_read","list_branches","list_commits","list_issue_types","list_issues","list_pull_requests","list_releases","list_starred_repositories","list_tags","pull_request_read","search_code","search_issues","search_pull_requests","search_repositories"]},{"name":"safeoutputs","tools":["add_comment","missing_data","missing_tool","noop"]}]}
 # This file was automatically generated by gh-aw. DO NOT EDIT. To debug this workflow, load the skill at https://github.com/github/gh-aw/blob/main/debug.md
 #
 #    ___                   _   _
@@ -44,7 +44,7 @@
 #   - actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 (source v9)
 #   - actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
 #   - actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-#   - github/gh-aw/actions/setup@61c0eba13a1bff2cc7ce7f2681620332f28b6b9e # 61c0eba13a1bff2cc7ce7f2681620332f28b6b9e
+#   - github/gh-aw/actions/setup@d5654b7870f30e0d22efdf1f92f3727b6f1dc313 # d5654b7870f30e0d22efdf1f92f3727b6f1dc313
 #
 # Container images used:
 #   - ghcr.io/github/gh-aw-firewall/api-proxy:0.28.30@sha256:6294a95f9ca39be1cd6125cebffa9d2ba72a9bfabb8bab2160111788b67ab94d
@@ -115,7 +115,7 @@ jobs:
     steps:
       - name: Setup Scripts
         id: setup
-        uses: cgwalters-forge/gh-aw/actions/setup@61c0eba13a1bff2cc7ce7f2681620332f28b6b9e # 61c0eba13a1bff2cc7ce7f2681620332f28b6b9e
+        uses: cgwalters-forge/gh-aw/actions/setup@d5654b7870f30e0d22efdf1f92f3727b6f1dc313 # d5654b7870f30e0d22efdf1f92f3727b6f1dc313
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
@@ -428,7 +428,7 @@ jobs:
     steps:
       - name: Setup Scripts
         id: setup
-        uses: cgwalters-forge/gh-aw/actions/setup@61c0eba13a1bff2cc7ce7f2681620332f28b6b9e # 61c0eba13a1bff2cc7ce7f2681620332f28b6b9e
+        uses: cgwalters-forge/gh-aw/actions/setup@d5654b7870f30e0d22efdf1f92f3727b6f1dc313 # d5654b7870f30e0d22efdf1f92f3727b6f1dc313
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
@@ -943,9 +943,7 @@ jobs:
           touch /tmp/gh-aw/agent-step-summary.md
           (umask 177 && touch /tmp/gh-aw/agent-stdio.log /tmp/gh-aw/claude-debug.log)
           # Execute Claude Code CLI with prompt from file, as the host-user sandbox user
-          cat > "${RUNNER_TEMP}/gh-aw/host-user-agent-command.sh" << 'GH_AW_HOST_USER_AGENT_COMMAND_EOF'
-          GH_AW_NODE_EXEC="${GH_AW_NODE_BIN:-}"; if [ -z "$GH_AW_NODE_EXEC" ] || [ ! -x "$GH_AW_NODE_EXEC" ]; then GH_AW_NODE_EXEC="$(command -v node 2>/dev/null || true)"; fi; if [ -z "$GH_AW_NODE_EXEC" ]; then echo "node runtime missing on this runner — check runtimes.node in workflow YAML" >&2; exit 127; fi; GH_AW_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"; if [ -n "$GH_AW_NPM_GLOBAL_ROOT" ]; then export NODE_PATH="${GH_AW_NPM_GLOBAL_ROOT}${NODE_PATH:+:${NODE_PATH}}"; fi; "$GH_AW_NODE_EXEC" ${RUNNER_TEMP}/gh-aw/actions/claude_harness.cjs claude --print --no-chrome --max-turns 12 --allowed-tools 'Bash,BashOutput,Edit,Edit(/tmp/*),ExitPlanMode,Glob,Grep,KillBash,LS,MultiEdit,MultiEdit(/tmp/*),NotebookEdit,NotebookRead,Read,Read(/tmp/*),Skill,Task,TodoWrite,Write,Write(/tmp/*),mcp__github__actions_get,mcp__github__actions_list,mcp__github__get_code_scanning_alert,mcp__github__get_commit,mcp__github__get_dependabot_alert,mcp__github__get_discussion,mcp__github__get_discussion_comments,mcp__github__get_file_contents,mcp__github__get_job_logs,mcp__github__get_label,mcp__github__get_latest_release,mcp__github__get_me,mcp__github__get_notification_details,mcp__github__get_pull_request,mcp__github__get_pull_request_comments,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_review_comments,mcp__github__get_pull_request_reviews,mcp__github__get_pull_request_status,mcp__github__get_release_by_tag,mcp__github__get_secret_scanning_alert,mcp__github__get_tag,mcp__github__issue_read,mcp__github__list_branches,mcp__github__list_code_scanning_alerts,mcp__github__list_commits,mcp__github__list_dependabot_alerts,mcp__github__list_discussion_categories,mcp__github__list_discussions,mcp__github__list_issue_types,mcp__github__list_issues,mcp__github__list_label,mcp__github__list_notifications,mcp__github__list_pull_requests,mcp__github__list_releases,mcp__github__list_secret_scanning_alerts,mcp__github__list_starred_repositories,mcp__github__list_tags,mcp__github__pull_request_read,mcp__github__search_code,mcp__github__search_issues,mcp__github__search_orgs,mcp__github__search_pull_requests,mcp__github__search_repositories,mcp__github__search_users,mcp__safeoutputs' --debug-file /tmp/gh-aw/claude-debug.log --verbose --permission-mode acceptEdits --output-format stream-json --mcp-config "${RUNNER_TEMP}/gh-aw/mcp-config/mcp-servers.json" --prompt-file /tmp/gh-aw/aw-prompts/prompt.txt${GH_AW_MODEL_AGENT_CLAUDE:+ --model "$GH_AW_MODEL_AGENT_CLAUDE"}
-          GH_AW_HOST_USER_AGENT_COMMAND_EOF
+          printf '%s\n' "$GH_AW_HOST_USER_AGENT_COMMAND" > "${RUNNER_TEMP}/gh-aw/host-user-agent-command.sh"
           # Only these variables reach the sandbox; none of them holds a secret.
           gh_aw_sandbox_args=()
           for gh_aw_name in ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_MAX_RETRIES BASH_DEFAULT_TIMEOUT_MS BASH_MAX_TIMEOUT_MS CLAUDE_CODE_DISABLE_FAST_MODE DISABLE_BUG_COMMAND DISABLE_ERROR_REPORTING DISABLE_TELEMETRY GH_AW_LLM_PROVIDER GH_AW_MAX_AI_CREDITS GH_AW_MAX_TURNS GH_AW_MCP_CONFIG GH_AW_MODEL_AGENT_CLAUDE GH_AW_PHASE GH_AW_PROMPT GH_AW_SAFE_OUTPUTS GH_AW_TOOL_TIMEOUT GH_AW_VERSION GITHUB_AW GITHUB_STEP_SUMMARY GITHUB_WORKSPACE MCP_TIMEOUT MCP_TOOL_TIMEOUT PATH RUNNER_TEMP TRACEPARENT; do
@@ -967,6 +965,7 @@ jobs:
           DISABLE_BUG_COMMAND: 1
           DISABLE_ERROR_REPORTING: 1
           DISABLE_TELEMETRY: 1
+          GH_AW_HOST_USER_AGENT_COMMAND: GH_AW_NODE_EXEC="${GH_AW_NODE_BIN:-}"; if [ -z "$GH_AW_NODE_EXEC" ] || [ ! -x "$GH_AW_NODE_EXEC" ]; then GH_AW_NODE_EXEC="$(command -v node 2>/dev/null || true)"; fi; if [ -z "$GH_AW_NODE_EXEC" ]; then echo "node runtime missing on this runner — check runtimes.node in workflow YAML" >&2; exit 127; fi; GH_AW_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"; if [ -n "$GH_AW_NPM_GLOBAL_ROOT" ]; then export NODE_PATH="${GH_AW_NPM_GLOBAL_ROOT}${NODE_PATH:+:${NODE_PATH}}"; fi; "$GH_AW_NODE_EXEC" ${RUNNER_TEMP}/gh-aw/actions/claude_harness.cjs claude --print --no-chrome --max-turns 12 --allowed-tools 'Bash,BashOutput,Edit,Edit(/tmp/*),ExitPlanMode,Glob,Grep,KillBash,LS,MultiEdit,MultiEdit(/tmp/*),NotebookEdit,NotebookRead,Read,Read(/tmp/*),Skill,Task,TodoWrite,Write,Write(/tmp/*),mcp__github__actions_get,mcp__github__actions_list,mcp__github__get_code_scanning_alert,mcp__github__get_commit,mcp__github__get_dependabot_alert,mcp__github__get_discussion,mcp__github__get_discussion_comments,mcp__github__get_file_contents,mcp__github__get_job_logs,mcp__github__get_label,mcp__github__get_latest_release,mcp__github__get_me,mcp__github__get_notification_details,mcp__github__get_pull_request,mcp__github__get_pull_request_comments,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_review_comments,mcp__github__get_pull_request_reviews,mcp__github__get_pull_request_status,mcp__github__get_release_by_tag,mcp__github__get_secret_scanning_alert,mcp__github__get_tag,mcp__github__issue_read,mcp__github__list_branches,mcp__github__list_code_scanning_alerts,mcp__github__list_commits,mcp__github__list_dependabot_alerts,mcp__github__list_discussion_categories,mcp__github__list_discussions,mcp__github__list_issue_types,mcp__github__list_issues,mcp__github__list_label,mcp__github__list_notifications,mcp__github__list_pull_requests,mcp__github__list_releases,mcp__github__list_secret_scanning_alerts,mcp__github__list_starred_repositories,mcp__github__list_tags,mcp__github__pull_request_read,mcp__github__search_code,mcp__github__search_issues,mcp__github__search_orgs,mcp__github__search_pull_requests,mcp__github__search_repositories,mcp__github__search_users,mcp__safeoutputs' --debug-file /tmp/gh-aw/claude-debug.log --verbose --permission-mode acceptEdits --output-format stream-json --mcp-config "${RUNNER_TEMP}/gh-aw/mcp-config/mcp-servers.json" --prompt-file /tmp/gh-aw/aw-prompts/prompt.txt${GH_AW_MODEL_AGENT_CLAUDE:+ --model "$GH_AW_MODEL_AGENT_CLAUDE"}
           GH_AW_LLM_PROVIDER: anthropic
           GH_AW_MAX_AI_CREDITS: ${{ vars.GH_AW_DEFAULT_MAX_AI_CREDITS || '1000' }}
           GH_AW_MAX_TURNS: 12
@@ -1181,7 +1180,7 @@ jobs:
     steps:
       - name: Setup Scripts
         id: setup
-        uses: cgwalters-forge/gh-aw/actions/setup@61c0eba13a1bff2cc7ce7f2681620332f28b6b9e # 61c0eba13a1bff2cc7ce7f2681620332f28b6b9e
+        uses: cgwalters-forge/gh-aw/actions/setup@d5654b7870f30e0d22efdf1f92f3727b6f1dc313 # d5654b7870f30e0d22efdf1f92f3727b6f1dc313
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
@@ -1430,7 +1429,7 @@ jobs:
     steps:
       - name: Setup Scripts
         id: setup
-        uses: cgwalters-forge/gh-aw/actions/setup@61c0eba13a1bff2cc7ce7f2681620332f28b6b9e # 61c0eba13a1bff2cc7ce7f2681620332f28b6b9e
+        uses: cgwalters-forge/gh-aw/actions/setup@d5654b7870f30e0d22efdf1f92f3727b6f1dc313 # d5654b7870f30e0d22efdf1f92f3727b6f1dc313
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
@@ -1495,7 +1494,7 @@ jobs:
     steps:
       - name: Setup Scripts
         id: setup
-        uses: cgwalters-forge/gh-aw/actions/setup@61c0eba13a1bff2cc7ce7f2681620332f28b6b9e # 61c0eba13a1bff2cc7ce7f2681620332f28b6b9e
+        uses: cgwalters-forge/gh-aw/actions/setup@d5654b7870f30e0d22efdf1f92f3727b6f1dc313 # d5654b7870f30e0d22efdf1f92f3727b6f1dc313
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
