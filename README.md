@@ -4,6 +4,21 @@ This repository dispatches a bounded, disposable RHEL 10 development runner.
 Tailscale supplies private networking inside the remote workflow; access is
 ordinary OpenSSH as user `runner`.
 
+## The `wfc-spike` branch
+
+This branch (never main) holds a spike of an agent workflow compiled with
+[workflow-compiler](https://github.com/cgwalters-forge/workflow-compiler),
+gh-aw safe-outputs style (cgwalters-forge/tracker#254):
+`workflows/safe-outputs-demo.ncl` compiles to
+`.github/workflows/safe-outputs-demo.lock.yml` with `./wfc-compile.sh` (on a
+devspace; it builds wfc at the commit in `.wfc-rev`). The agent job runs a
+scripted agent (`agentskills/stub-agent.sh`; there is no inference here) in
+the compiler's sandbox, with no token, and it proposes outputs as JSONL; the
+`apply` job, with `issues: write` only, validates them in its own sandbox
+(`apply/validate.cjs`) and applies them from its publish phase
+(`apply/apply.cjs`), to issue #12 only. Run it with
+`gh workflow run safe-outputs-demo.lock.yml --ref wfc-spike -f task=...`.
+
 ## Prerequisites
 
 Install Rust/Cargo 1.85 or newer. The `cargo devspace` alias is defined in this

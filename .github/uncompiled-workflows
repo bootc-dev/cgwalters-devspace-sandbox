@@ -1,0 +1,2 @@
+# Workflows not compiled from workflows/ (wfc check).
+devspace.yml  # the hand-written devspace runner, outside the wfc-spike demo
