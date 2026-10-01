@@ -14,7 +14,7 @@ else
 fi
 secrets=$(env | grep -c -E '^(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN)=' || true)
 check secret-env "${secrets} credential variables in the environment"
-check inference "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-unset}"
+check inference "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-unset} OPENAI_BASE_URL=${OPENAI_BASE_URL:-unset}"
 
 d=$(mktemp -d)
 cat >"$d/Containerfile" <<'CF'
