@@ -1,6 +1,6 @@
-# The wfc-spike demo: a sandboxed agent proposes outputs, a separate job
-# with the one write permission validates and applies them, the way
-# gh-aw's safe outputs work. Compiled with wfc (cgwalters-forge/
+# The wfc-spike demo: a sandboxed agent proposes outputs, and a separate
+# job with only the write permissions they need checks and applies them,
+# the way gh-aw's safe outputs work. Compiled with wfc (cgwalters-forge/
 # workflow-compiler, at the commit in .wfc-rev) to
 # .github/workflows/safe-outputs-demo.lock.yml by ./wfc-compile.sh.
 #
@@ -8,27 +8,16 @@
 #           sandbox (runner-sandbox, no sudo, no token of the job's), on the
 #           dispatcher's task; it writes safe-outputs/outputs.jsonl, which
 #           is staged and uploaded after the seal.
-#   apply:  issues: write and nothing else. The proposals and the scripts
-#           are shared into its sandbox, where validate.cjs checks them
-#           against the config below; apply.cjs re-checks the result in
-#           the publish phase and makes the writes.
+#   apply:  workflow-compiler's safe_outputs macro (lib/safe-outputs.ncl):
+#           checks the proposals in its own sandbox, then again in its
+#           publish phase, and applies them with issues, contents and
+#           pull-requests write.
 let gha = import "../wfc/lib/gha.ncl" in
 let agent_run = import "../wfc/lib/agent-run.ncl" in
+let safe_outputs = import "../wfc/lib/safe-outputs.ncl" in
 
-let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in # v8.0.1
 let SHARE = gha.share_dir in
 let DEFAULT_TASK = "Say hello on the demo issue." in
-
-# What the apply job may do. The privileged phase shares it, so neither
-# the agent nor the validator can change it.
-let config = {
-  repo = "bootc-dev/cgwalters-devspace-sandbox",
-  max_total = 3,
-  types = {
-    add_comment = { max = 1, targets = [12], default_target = 12, max_body_bytes = 8192 },
-    noop = { max = 1 },
-  },
-} in
 
 let agent_job =
   let job = agent_run {
@@ -47,15 +36,14 @@ let agent_job =
     { share = { name = "task", content = "${{ inputs.task || '%{DEFAULT_TASK}' }}" } },
   ])
   |> std.record.update "steps" (job.steps @ [
-    { "if" = "always()", upload = { name = "safe-outputs", path = "safe-outputs" } },
+    safe_outputs.upload,
     # What the stub's sandbox checks printed, workflow commands included,
-    # through the wrapper, which must neutralize them.
-    { name = "Show the sandbox checks", "if" = "always()", run = "cat sandbox-checks.log" },
+    # through the wrapper, which must neutralize them: it is the agent's
+    # output, so annotations too, as in agent_run's own step (#60).
+    { name = "Show the sandbox checks", "if" = "always()", run = "cat sandbox-checks.log", annotations = false },
   ])
   |> std.record.insert "permissions" { contents = "read" }
 in
-
-let validated = "%{gha.staged "safe-outputs-validated"}/validated/validated.json" in
 
 gha.compile {
   name = "Safe outputs demo",
@@ -75,33 +63,19 @@ gha.compile {
   permissions = { contents = "read" },
   jobs = {
     agent = agent_job,
-    apply = {
+    apply = safe_outputs.apply {
       needs = "agent",
-      permissions = { issues = "write" },
-      "timeout-minutes" = 10,
-      # Nothing from the repository: the scripts come from the lock file.
-      handoff.workspace = 'none,
-      runner_steps = [
-        { uses = download, with = { name = "safe-outputs", path = "proposals" } },
-        { share = { name = "proposals", path = "proposals" } },
-        { share = { name = "safe-outputs-config.json", content = std.serialize 'Json config } },
-        { share = { name = "validate.cjs", content = import "../apply/validate.cjs" as 'Text } },
-        { share = { name = "apply.cjs", content = import "../apply/apply.cjs" as 'Text } },
-      ],
-      steps = [
-        {
-          name = "Validate the proposals",
-          run = "node %{SHARE}/validate.cjs %{SHARE}/safe-outputs-config.json %{SHARE}/proposals validated",
+      repo = "bootc-dev/cgwalters-devspace-sandbox",
+      types = {
+        add_comment.targets = [12],
+        create_pull_request = {
+          base = "wfc-spike",
+          allowed_paths = ["docs/**"],
+          max_patch_bytes = 16384,
+          branch_prefix = "wfc-spike-outputs/",
         },
-        { upload = { name = "safe-outputs-validated", path = "validated" } },
-      ],
-      publish_steps = [
-        {
-          name = "Apply the validated outputs",
-          run = "node %{SHARE}/apply.cjs %{SHARE}/safe-outputs-config.json %{validated}",
-          env = { GITHUB_TOKEN = "${{ github.token }}" },
-        },
-      ],
+        noop = {},
+      },
     },
   },
 }

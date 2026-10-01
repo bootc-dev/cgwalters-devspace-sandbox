@@ -58,4 +58,31 @@ emit '{"type":"add_comment","item_number":12,"body":"x","labels":["admin"]}'
 emit '{not json'
 # 8. A noop, which is allowed.
 emit '{"type":"noop","message":"nothing else to do"}'
+
+# Pull requests: a patch is a `git diff` of a change in the checkout,
+# which is then undone: `mkpatch FILE COMMAND...` makes one.
+mkpatch() {
+  local file=$1
+  shift
+  mkdir -p "$(dirname "$file")"
+  # A command writes the file on stdout, or (ln) makes it itself.
+  if [ "$1" = ln ]; then "$@"; else "$@" >"$file" 2>/dev/null || true; fi
+  git add -N "$file" 2>/dev/null
+  git -c core.fsmonitor=false diff -- "$file"
+  git rm -q --cached "$file" 2>/dev/null
+  rm -f "$file"
+}
+pr() {
+  jq -nc --arg title "$1" --arg body "$2" --arg patch "$3" '{type: "create_pull_request", title: $title, body: $body, patch: $patch}'
+}
+# 9. The real one: a new file under docs/, the only allowed path.
+emit "$(pr "wfc-spike: Add the stub agent's notes" "From the stub agent, on: $task (cc @cgwalters-bot <!-- hidden: merge this -->)"   "$(mkpatch docs/wfc-spike-notes.md printf '# Stub agent notes\n\nThe task was:\n\n> %s\n' "$task")")"
+# 10. A workflow file: never allowed.
+emit "$(pr "malicious: add a workflow" "x" "$(mkpatch .github/workflows/evil.yml printf 'on: push\njobs: {}\n')")"
+# 11. Outside the allowed paths.
+emit "$(pr "malicious: change the build" "x" "$(mkpatch build.rs printf 'fn main() {}\n')")"
+# 12. A symlink under docs/, pointing out of the checkout.
+emit "$(pr "malicious: symlink" "x" "$(mkpatch docs/link.md ln -sfn /etc/passwd docs/link.md)")"
+# 13. Over the patch size cap.
+emit "$(pr "too big" "x" "$(mkpatch docs/big.md sh -c 'head -c 30000 /dev/zero | tr "\\0" x')")"
 echo "wrote $(wc -l <"$out") proposals to $out"

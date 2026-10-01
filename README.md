@@ -14,9 +14,10 @@ gh-aw safe-outputs style (cgwalters-forge/tracker#254):
 devspace; it builds wfc at the commit in `.wfc-rev`). The agent job runs a
 scripted agent (`agentskills/stub-agent.sh`; there is no inference here) in
 the compiler's sandbox, with no token, and it proposes outputs as JSONL; the
-`apply` job, with `issues: write` only, validates them in its own sandbox
-(`apply/validate.cjs`) and applies them from its publish phase
-(`apply/apply.cjs`), to issue #12 only. Run it with
+`apply` job (the compiler's `safe_outputs` macro, with only the write
+permissions its output types need) checks them in its own sandbox, checks
+them again in its publish phase, and applies them: comments to issue #12
+only, and pull requests against this branch that change only `docs/`. Run it with
 `gh workflow run safe-outputs-demo.lock.yml --ref wfc-spike -f task=...`.
 
 ## Prerequisites
