@@ -117,10 +117,44 @@ that request those OIDC tokens in every step's environment; the agent starts
 without them (`scripts/runner-sandbox.mjs`), and the isolation check proves
 it. `scripts/agent-isolation-check.mjs` verifies before every run that the
 agent can't use sudo, read the job's environment or files, or reach the
-cloud metadata service, also from a container on the host network. Its
-network access is otherwise open for now, except the tailnet; the plan is a
-proxy that sees requests and allows writes (`POST` and the like) only to
-known endpoints.
+cloud metadata service, also from a container on the host network.
+
+The agent reaches the network only through an L7 egress proxy, except for
+the inference broker on the tailnet (below), which it reaches directly, so
+its run token never passes through the proxy.
+`scripts/egress-proxy.mjs` runs [mitmproxy](https://mitmproxy.org)
+(`mitmdump`, pinned in `agent/egress/requirements.txt`) as its own system
+user, with a CA it creates for the job, and `agent/egress/addon.py`, which
+applies `agent/egress/policy.py`:
+
+- Reads (`GET`, `HEAD` and `OPTIONS` without a body) go to any host that
+  isn't on a threat feed ([HaGeZi's TIF](https://github.com/hagezi/dns-blocklists),
+  fetched when the job starts; without it, with a warning).
+- Writes (any other method, a read with a body, a WebSocket) go only to the
+  endpoints `agent/egress/policy.toml` lists: `git-upload-pack` (fetching
+  over HTTPS) on the usual git forges, and npm's audit API. Pushes, API
+  calls and uploads anywhere else get a 403 with an `X-Egress-Denied`
+  header saying why.
+- A request whose `Host` header or TLS server name differs from where its
+  connection goes (domain fronting) is refused, and so is anything in a
+  `CONNECT` tunnel that isn't HTTP.
+- Its log records the method, host, port, path and outcome of each request,
+  never headers, bodies or query strings; it goes into the transcript as
+  `access.log`, and the hosts refused into `summary.json`'s
+  `egress_denied`.
+
+`setup-runner-sandbox.mjs --egress-proxy` gives `runner-sandbox`'s commands
+the proxy and its CA in their environment (`HTTPS_PROXY`, `SSL_CERT_FILE`,
+`NODE_EXTRA_CA_CERTS`, `CARGO_HTTP_CAINFO` and the like), and nftables,
+matching its uid and subordinate uids, rejects everything else it sends
+but loopback: direct connections and DNS included, so the proxy can't be
+bypassed, from a rootless container either. The proxy itself resolves
+names, and its uid can't reach the tailnet, the metadata service, the
+WireServer or private addresses. Tools that ignore the proxy variables or
+bring their own CA list fail closed, and so do containers on their own
+network: they have neither the proxy nor its CA. The isolation check
+proves this before every run: cargo and npm fetch through the proxy, a
+`POST` and a push are refused, and direct connections fail.
 
 Devspaces and agent runs are for public repositories only: their logs and
 transcripts are public. `scripts/public-repo.mjs` refuses a target that
@@ -224,9 +258,9 @@ settles where tasks and their tools belong.
   action, on by default, so CI jobs get the same unprivileged user.
 - Align `packages.txt` with what `bootc-ubuntu-setup` installs, or switch to a
   devcontainer with the podman socket mounted in.
-- Filter agent runs' egress, which is open for now: an L7 proxy that allows
-  reads but writes (`POST` and the like) only to listed endpoints, as
-  OpenShell's policies do, possibly with a shared denylist
+- Egress proxy follow-ups: let containers on their own network use the
+  proxy (its address and CA inside them), filter `GET` URLs on URLhaus's
+  feed, and inject credentials per endpoint once agents have any
   ([research notes](https://gist.github.com/cgwalters-bot/30ef6cce070d78f60c55284d4c6e6193)).
 - Later, support launching an agent that can work autonomously and push changes
   with safe, scoped credentials, while preserving interactive access.

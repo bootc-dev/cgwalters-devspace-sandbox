@@ -2,23 +2,42 @@
 // Check, from a workflow step (as runner), that the agent is contained,
 // running things the way the agent step does (agentCommand): no sudo, no
 // access to the runner's processes or files, no cloud metadata service,
-// also not from a rootless container, and no tailscaled LocalAPI. Its
-// network is otherwise open, except the tailnet: with --tailnet-allow (as
-// given to setup-runner-sandbox.mjs), it reaches only that endpoint there.
+// also not from a rootless container, and no tailscaled LocalAPI. On the
+// tailnet, with --tailnet-allow (as given to setup-runner-sandbox.mjs), it
+// reaches only that endpoint. With --egress-proxy, it reaches everything
+// else only through the egress proxy (scripts/egress-proxy.mjs): reads and
+// the toolchains' fetches work, writes to unlisted endpoints are refused,
+// and going around the proxy fails, also from a container; without, its
+// network is otherwise open.
 // It gets none of the variables that mint the job's OIDC tokens. With
 // --run-token-file (agent/praxis.mjs), the praxis run token reaches it only
 // in its opencode configuration, which only it can read.
 // Exits nonzero if any check fails.
-//   agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] CONTROL_URL
+//   agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] [--egress-proxy] CONTROL_URL
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { OIDC_REQUEST_VARS, OPENCODE_CONFIG_DIR } from "../agent/praxis.mjs";
 import { asAgent } from "./agent-lib.mjs";
+import { CA_CERT, PROXY_URL } from "./egress-proxy.mjs";
 import { SANDBOX_HOME, SANDBOX_USER, fail } from "./runner-sandbox.mjs";
 
 const METADATA_URL = "http://169.254.169.254/metadata/instance?api-version=2021-02-01";
+// Azure's WireServer, which serves the VM's configuration.
+const WIRESERVER_URL = "http://168.63.129.16/?comp=versions";
+// With --egress-proxy: a write it must refuse, on a host that would take it.
+const WRITE_URL = "https://example.com/";
+const PUSH_URL = "https://github.com/bootc-dev/bootc.git/git-receive-pack";
+const FETCH_REPO = "https://github.com/bootc-dev/bootc";
+const PUBLIC_DNS = "8.8.8.8";
+// What the toolchains fetch through the proxy: a crate and an npm package.
+const CARGO_TOML = '[package]\nname = "egress-check"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\nitoa = "1"\n';
+const NPM_PACKAGE = "is-number";
+const EGRESS_WORK = "egress-check";
+// Where a container sees the proxy's CA.
+const CONTAINER_CA = "/run/egress-ca.pem";
 // Small, and has curl.
 const CONTAINER_IMAGE = "registry.access.redhat.com/ubi10/ubi-minimal";
 // Any uid other than root in the container maps to a subordinate uid.
@@ -33,12 +52,17 @@ const LOCALAPI_STATUS = "http://local-tailscaled.sock/localapi/v0/status";
 const OTHER_TAILNET_PORT = 22;
 
 const { values, positionals } = parseArgs({
-  options: { "tailnet-allow": { type: "string" }, "run-token-file": { type: "string" } }, allowPositionals: true,
+  options: {
+    "tailnet-allow": { type: "string" }, "run-token-file": { type: "string" },
+    "egress-proxy": { type: "boolean", default: false },
+  },
+  allowPositionals: true,
 });
 const [control] = positionals;
 if (!control || positionals.length > 1) {
-  fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] CONTROL_URL");
+  fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] [--egress-proxy] CONTROL_URL");
 }
+const egress = values["egress-proxy"];
 const tailnetAllow = values["tailnet-allow"];
 const runTokenFile = values["run-token-file"];
 const OPENCODE_CONFIG = `${SANDBOX_HOME}/${OPENCODE_CONFIG_DIR}/opencode.json`;
@@ -109,7 +133,14 @@ function expect(want, what, ok) {
 }
 const succeeds = (cmd) => asAgent(cmd).status === 0;
 const curl = (args) => ["curl", "-sS", "-m", "30", "-o", "/dev/null", ...args];
-const inContainer = (cmd) => ["podman", "run", "--rm", "--network=host", "--user", CONTAINER_UID, CONTAINER_IMAGE, ...cmd];
+// Not through the egress proxy, whatever the environment says.
+const direct = (args) => curl(["--noproxy", "*", ...args]);
+// Through it, failing on an error status (it answers 502 when it can't
+// connect).
+const proxied = (args) => curl(["--fail", ...args]);
+// On the host's network; with the egress proxy, its CA is there too.
+const inContainer = (cmd) => ["podman", "run", "--rm", "--network=host", "--user", CONTAINER_UID,
+  ...(egress ? ["--security-opt", "label=disable", "-v", `${CA_CERT}:${CONTAINER_CA}:ro`] : []), CONTAINER_IMAGE, ...cmd];
 // Every process environment the agent can read, NUL-separated.
 const environs = asAgent(["sh", "-c", "cat /proc/[0-9]*/environ 2>/dev/null; true"]).stdout.toString("latin1");
 
@@ -182,14 +213,67 @@ if (runTokenFile) {
 }
 expect("succeed", `${SANDBOX_USER} reaches ${control} (control)`, succeeds(curl([control])));
 expect("fail", `${SANDBOX_USER} can't reach the instance metadata service`,
-  succeeds(curl(["-H", "Metadata:true", METADATA_URL])));
+  succeeds(direct(["-H", "Metadata:true", METADATA_URL])));
 expect("succeed", `${SANDBOX_USER} pulls ${CONTAINER_IMAGE}`, succeeds(["podman", "pull", "-q", CONTAINER_IMAGE]));
 // The control shows the container and its curl work, so the refusal is the
 // filter on subordinate uids.
 expect("succeed", `a container as subordinate uid ${CONTAINER_UID} reaches ${control} (control)`,
-  succeeds(inContainer(curl([control]))));
+  succeeds(inContainer(curl([...(egress ? ["--cacert", CONTAINER_CA, "-x", PROXY_URL] : []), control]))));
 expect("fail", `a container as subordinate uid ${CONTAINER_UID} can't reach the instance metadata service`,
-  succeeds(inContainer(curl(["-H", "Metadata:true", METADATA_URL]))));
+  succeeds(inContainer(direct(["-H", "Metadata:true", METADATA_URL]))));
+if (egress) await checkEgress();
+
+// The egress proxy: the toolchains fetch through it, it refuses writes to
+// unlisted endpoints (with its X-Egress-Denied header, so the refusal is
+// the proxy's own), going around it fails, and it reaches nothing the
+// sandbox may not, from a container either.
+async function checkEgress() {
+  // Headers from a curl run as the agent (or in a container), or "".
+  const headers = (cmd) => asAgent(cmd).stdout.toString("latin1");
+  const refusedByProxy = (out) => /^HTTP\/[\d.]+ 403\b/m.test(out) && /^x-egress-denied:/im.test(out);
+  const head = ["curl", "-sS", "-m", "30", "-o", "/dev/null", "-D", "-"];
+  const work = `${SANDBOX_HOME}/${EGRESS_WORK}`;
+  asAgent(["rm", "-rf", work]);
+  asAgent(["mkdir", "-p", `${work}/crate/src`, `${work}/npm`]);
+  asAgent(["tee", `${work}/crate/Cargo.toml`], { input: CARGO_TOML });
+  asAgent(["tee", `${work}/crate/src/main.rs`], { input: "fn main() {}\n" });
+
+  expect("succeed", `${SANDBOX_USER} reads ${control} through the egress proxy`, succeeds(proxied(["--proxy", PROXY_URL, control])));
+  expect("succeed", `${SANDBOX_USER} fetches a crate with cargo`,
+    succeeds(["cargo", "fetch", "--manifest-path", `${work}/crate/Cargo.toml`]));
+  expect("succeed", `${SANDBOX_USER} installs ${NPM_PACKAGE} with npm`,
+    succeeds(["npm", "install", "--no-fund", "--prefix", `${work}/npm`, NPM_PACKAGE]));
+  expect("succeed", `${SANDBOX_USER} fetches from git (POST git-upload-pack)`,
+    succeeds(["timeout", "60", "git", "ls-remote", FETCH_REPO, "HEAD"]));
+
+  expect("succeed", `the proxy refuses a POST to ${WRITE_URL}`,
+    refusedByProxy(headers([...head, "-X", "POST", "-d", "egress-check", WRITE_URL])));
+  expect("succeed", "the proxy refuses a git push (POST git-receive-pack)",
+    refusedByProxy(headers([...head, "-X", "POST", "-d", "0000", PUSH_URL])));
+  expect("succeed", "the proxy refuses a Host header naming another host than the connection's (domain fronting)",
+    refusedByProxy(headers([...head, "-H", "Host: example.com", control])));
+  expect("succeed", `a container as subordinate uid ${CONTAINER_UID} on the host's network is refused a POST too`,
+    refusedByProxy(headers(inContainer([...head, "--cacert", CONTAINER_CA, "-x", PROXY_URL, "-X", "POST", "-d", "x", WRITE_URL]))));
+
+  expect("fail", `${SANDBOX_USER} can't reach ${control} around the proxy`, succeeds(direct([control])));
+  const { address } = await lookup(new URL(control).hostname, { family: 4 });
+  expect("fail", `${SANDBOX_USER} can't open a TCP connection to ${address}:443 around the proxy`,
+    succeeds(tcpProbe(address, 443)));
+  expect("fail", `a container as subordinate uid ${CONTAINER_UID} can't reach ${control} around the proxy`,
+    succeeds(inContainer(direct([control]))));
+  expect("fail", `a container on its own network can't reach ${control}`,
+    succeeds(["podman", "run", "--rm", CONTAINER_IMAGE, ...direct([control])]));
+  expect("fail", `${SANDBOX_USER} can't resolve names (getent hosts)`, succeeds(["getent", "hosts", new URL(control).hostname]));
+  expect("fail", `${SANDBOX_USER} can't reach a public DNS server (${PUBLIC_DNS}:53)`, succeeds(tcpProbe(PUBLIC_DNS, 53)));
+  expect("fail", `${SANDBOX_USER} can't reach the WireServer`, succeeds(direct([WIRESERVER_URL])));
+  expect("fail", "the proxy doesn't reach the instance metadata service", succeeds(proxied(["-H", "Metadata:true", METADATA_URL])));
+  expect("fail", "the proxy doesn't reach the WireServer", succeeds(proxied([WIRESERVER_URL])));
+  if (tailnetAllow) {
+    expect("fail", `the proxy doesn't reach ${tailnetAllow} on the tailnet`,
+      succeeds(proxied(["--proxy", PROXY_URL, "--noproxy", "", tailnetAllow])));
+  }
+  asAgent(["rm", "-rf", work]);
+}
 
 // Through the LocalAPI, tailscaled would dial and list the tailnet for
 // anyone, whatever the packet filter says.

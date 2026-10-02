@@ -2,6 +2,7 @@
 // (created by setup-runner-sandbox.mjs): who it is, and how a workflow step
 // runs a command as it, with nothing of the step's environment.
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 
 export const SANDBOX_USER = "runner-sandbox";
 export const SANDBOX_HOME = `/home/${SANDBOX_USER}`;
@@ -15,6 +16,20 @@ const SUDO_VARS = ["SUDO_USER", "SUDO_UID", "SUDO_GID"];
 // and unset all the same, so that stays true if the wrapper changes.
 const FORBIDDEN_VARS = /^ACTIONS_/;
 const OIDC_REQUEST_VARS = ["ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"];
+// Root's: what every runner-sandbox command gets in its environment, as a
+// JSON object of strings. setup-runner-sandbox.mjs --egress-proxy writes
+// it (the proxy and its CA).
+export const SANDBOX_ENV_FILE = "/etc/runner-sandbox/environment.json";
+
+// The variables in SANDBOX_ENV_FILE, if there is one.
+function sandboxEnvironment() {
+  if (!existsSync(SANDBOX_ENV_FILE)) return {};
+  const env = JSON.parse(readFileSync(SANDBOX_ENV_FILE, "utf8"));
+  if (!env || typeof env !== "object" || Object.values(env).some((v) => typeof v !== "string")) {
+    throw new Error(`${SANDBOX_ENV_FILE} must be a JSON object of strings`);
+  }
+  return env;
+}
 
 export function fail(message) {
   console.error(`error: ${message}`);
@@ -36,7 +51,8 @@ export function run(cmd, args, { input } = {}) {
 // of the calling step's environment or cgroup comes along, and pam_systemd
 // gives it what an SSH login gets: XDG_RUNTIME_DIR, the user's systemd
 // manager and session bus, which rootless podman relies on. The command
-// runs in that session's scope, under user-UID.slice. Unlike machinectl
+// runs in that session's scope, under user-UID.slice. Its environment
+// includes SANDBOX_ENV_FILE's variables. Unlike machinectl
 // shell, which always allocates a pty, stdio stays pipes (binary safe,
 // stderr apart, EOF on stdin) and the exit status comes back. They must be
 // sockets: run0 hands them to PID 1 over D-Bus, which refuses regular
@@ -45,7 +61,7 @@ export function run(cmd, args, { input } = {}) {
 export function sandboxCommand(cmd, { cwd = SANDBOX_HOME, env = {} } = {}) {
   const forbidden = Object.keys(env).filter((k) => FORBIDDEN_VARS.test(k));
   if (forbidden.length > 0) throw new Error(`refusing to pass ${forbidden.join(", ")} to ${SANDBOX_USER}`);
-  const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, ...env };
+  const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, ...sandboxEnvironment(), ...env };
   // Unlike systemd-run --collect, run0 leaves a failed unit behind for
   // every command that exits nonzero.
   const argv = ["run0", "--pipe", "--no-ask-password", "--shell-prompt-prefix=", `--user=${SANDBOX_USER}`,
