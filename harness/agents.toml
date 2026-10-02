@@ -2,7 +2,8 @@
 # starts each one's ACP server on stdio, and how it's told the model.
 # The claude and opencode commands are pinned in npm.txt, which devspaces
 # install; agent.yml runs opencode, with inference from the praxis broker
-# (agent/opencode.json), and claude once the broker can serve it. No
+# (homegit's dotfiles/.config/opencode, see agent/opencode-config.mjs),
+# and claude once the broker can serve it. No
 # secrets here: behind a wrapper, `env` is passed on the command line
 # (env K=V ...), which other users can see.
 

@@ -21,9 +21,9 @@
 // workflow land before the broker's cutover; it goes once the broker has
 // run tokens.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { asSandbox } from "../scripts/runner-sandbox.mjs";
+import { OPENCODE_CONFIG_DIR, installOpencodeConfig } from "./opencode-config.mjs";
 
 // The audience praxis expects (its RUN_OIDC_AUDIENCE default).
 export const AUDIENCE = "praxis-credential-broker";
@@ -44,12 +44,7 @@ const HTTP_TIMEOUT_MS = 30_000;
 // with the same run (and a new token), so a lost reply costs nothing.
 const REGISTER_ATTEMPTS = 4;
 const RETRY_DELAY_MS = 3000;
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-// opencode's configuration: the broker as its only provider; the base URL
-// and key are filled in here.
-const OPENCODE_CONFIG = join(ROOT, "agent/opencode.json");
-// Where opencode reads its global configuration, in runner-sandbox's home.
-export const OPENCODE_CONFIG_DIR = ".config/opencode";
+export { OPENCODE_CONFIG_DIR };
 
 function fail(message) {
   console.error(`error: ${message}`);
@@ -197,22 +192,18 @@ export async function register(dir, { env = process.env, retryDelayMs = RETRY_DE
   throw new Error(last);
 }
 
-// Writes runner-sandbox's opencode configuration, readable only by it: the
-// run token is its API key, which the broker takes in place of the caller's.
+// Writes runner-sandbox's opencode configuration, readable only by it:
+// homegit's (HOMEGIT_DIR, see opencode-config.mjs) with the run token as
+// its API key, which the broker takes in place of the caller's.
 function configure(dir) {
-  const base = process.env.PRAXIS_BASE_URL;
-  if (!base) fail("PRAXIS_BASE_URL is not set");
-  const config = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8"));
-  config.provider.praxis.options.baseURL = base;
-  config.provider.praxis.options.apiKey = runToken(dir) ?? PLACEHOLDER_KEY;
-  // umask 077 from the start, so the file is never readable by others; the
-  // content goes over stdin, never onto a command line.
-  const write = asSandbox(["sh", "-c",
-    `umask 077 && mkdir -p "$HOME/${OPENCODE_CONFIG_DIR}" && chmod 0700 "$HOME/${OPENCODE_CONFIG_DIR}" `
-    + `&& cat > "$HOME/${OPENCODE_CONFIG_DIR}/opencode.json.tmp" && chmod 0600 "$HOME/${OPENCODE_CONFIG_DIR}/opencode.json.tmp" `
-    + `&& mv "$HOME/${OPENCODE_CONFIG_DIR}/opencode.json.tmp" "$HOME/${OPENCODE_CONFIG_DIR}/opencode.json"`],
-  { input: `${JSON.stringify(config, null, 2)}\n` });
-  if (write.status !== 0) fail("writing runner-sandbox's opencode configuration failed");
+  const baseURL = process.env.PRAXIS_BASE_URL;
+  if (!baseURL) fail("PRAXIS_BASE_URL is not set");
+  if (!process.env.HOMEGIT_DIR) fail("HOMEGIT_DIR is not set: the homegit checkout with opencode's configuration");
+  try {
+    console.log(`opencode configuration: ${installOpencodeConfig(process.env.HOMEGIT_DIR, { baseURL, apiKey: runToken(dir) ?? PLACEHOLDER_KEY })}`);
+  } catch (e) {
+    fail(e.message);
+  }
 }
 
 // Ends the run, so its token admits nothing more, and keeps the final usage

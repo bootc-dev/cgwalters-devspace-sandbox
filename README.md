@@ -211,12 +211,21 @@ for the audience `praxis-credential-broker` and register the run with it
 (`POST /v1/runs`, no body), which the broker's `run-token-policy.yaml`
 allows only for this repository and workflow, pinned by id, when
 dispatched by hand.
-The run token it gets back stays in a directory only `runner` can read and
-is masked in the log. `praxis.mjs configure` puts it in `runner-sandbox`'s
-opencode configuration (`agent/opencode.json`, mode 0600), the only place
-the agent gets it; the isolation check proves it's nowhere else the agent
-can read. The broker's per-run cap and lifetime then bound what the agent
-spends, and nodes with the runners' tag but no registered run get nothing.
+opencode's configuration is not kept here: the run checks out the `homegit`
+input (default `cgwalters-bot/homegit` at `homegit_ref`, `main`), the
+configuration the bot's local opencode uses too, model included (the
+`model` input still overrides it). `agent/praxis.mjs configure` refuses a
+configuration that enables any provider but the broker, and gives
+`runner-sandbox` only `opencode.json` and `AGENTS.md` from its
+`dotfiles/.config/opencode` (opencode would run any plugin or command
+found there), with the
+broker's base URL (`PRAXIS_BASE_URL`), sharing off and the run token as
+the key set whatever the file says. The run token stays in a directory only
+`runner` can read and is masked in the log; its opencode `opencode.json`
+(mode 0600) is the only place the agent gets it, and the isolation check
+proves it's nowhere else the agent can read. The broker's per-run cap and
+lifetime then bound what the agent spends, and nodes with the runners' tag
+but no registered run get nothing.
 `harness/agents.toml` keeps opencode from loading the target repository's
 own configuration (which could bring other providers or plugins back).
 
