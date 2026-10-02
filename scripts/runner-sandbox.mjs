@@ -7,6 +7,9 @@ import { existsSync, readFileSync } from "node:fs";
 export const SANDBOX_USER = "runner-sandbox";
 export const SANDBOX_HOME = `/home/${SANDBOX_USER}`;
 const SANDBOX_PATH = "/usr/local/bin:/usr/bin:/bin";
+// Where agent.yml installs the Rust toolchain (rustup's proxies are in
+// /usr/local/bin); CARGO_HOME stays the user's own, in its home.
+const RUSTUP_HOME = "/opt/rustup";
 // run0 sets these as sudo would, and tools that see them may act as if run
 // under sudo; --setenv can't unset them.
 const SUDO_VARS = ["SUDO_USER", "SUDO_UID", "SUDO_GID"];
@@ -61,7 +64,7 @@ export function run(cmd, args, { input } = {}) {
 export function sandboxCommand(cmd, { cwd = SANDBOX_HOME, env = {} } = {}) {
   const forbidden = Object.keys(env).filter((k) => FORBIDDEN_VARS.test(k));
   if (forbidden.length > 0) throw new Error(`refusing to pass ${forbidden.join(", ")} to ${SANDBOX_USER}`);
-  const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, ...sandboxEnvironment(), ...env };
+  const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, RUSTUP_HOME, ...sandboxEnvironment(), ...env };
   // Unlike systemd-run --collect, run0 leaves a failed unit behind for
   // every command that exits nonzero.
   const argv = ["run0", "--pipe", "--no-ask-password", "--shell-prompt-prefix=", `--user=${SANDBOX_USER}`,
