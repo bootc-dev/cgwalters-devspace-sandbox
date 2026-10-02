@@ -28,6 +28,10 @@ run-name: "agent ${{ inputs.item }} ${{ inputs.repo }}"
 # validation code (vendor/gh-aw/), and bot-runs applies it. See
 # safe-outputs/safe-outputs.mjs.
 on:
+  # Spike only: lets GitHub learn this workflow on a non-default branch.
+  push:
+    branches: [bot/agent-run-praxis]
+    paths: [.github/workflows/agent.yml]
   workflow_dispatch:
     inputs:
       item:
