@@ -38,9 +38,20 @@ on:
         options: ["fake", "opencode"]
         default: fake
       model:
-        description: "Model name (empty: the agent's default)"
+        description: "Model, as provider/model (empty: the agent's default; for opencode, the one in homegit's configuration)"
         type: string
         default: ""
+      # opencode's configuration (providers, model, instructions) is the
+      # bot's own, dotfiles/.config/opencode in its homegit, which
+      # bot-opencode uses locally too. Public, like the target.
+      homegit:
+        description: "Repository, OWNER/REPO, whose dotfiles/.config/opencode configures opencode"
+        type: string
+        default: cgwalters-bot/homegit
+      homegit_ref:
+        description: "Branch, tag or commit of that repository"
+        type: string
+        default: main
       cores:
         description: "Runner CPU cores"
         type: choice
@@ -91,6 +102,8 @@ jobs:
           TIMEOUT: ${{ inputs.timeout }}
           BUDGET: ${{ inputs.budget }}
           AGENT: ${{ inputs.agent }}
+          HOMEGIT: ${{ inputs.homegit }}
+          HOMEGIT_REF: ${{ inputs.homegit_ref }}
         run: |
           set -euo pipefail
           if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]{0,2}$ ]] || (( TIMEOUT > 330 )); then
@@ -99,6 +112,14 @@ jobs:
           fi
           if ! [[ "$BUDGET" =~ ^(0|[1-9][0-9]{0,5})(\.[0-9]+)?$ ]]; then
             echo "::error::budget must be a number of AIC, not '$BUDGET'"
+            exit 1
+          fi
+          if ! [[ "$HOMEGIT" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::homegit must be OWNER/REPO, not '$HOMEGIT'"
+            exit 1
+          fi
+          if ! [[ "$HOMEGIT_REF" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]{0,199}$ ]] || [[ "$HOMEGIT_REF" == *..* ]]; then
+            echo "::error::homegit_ref must be a branch, tag or commit, not '$HOMEGIT_REF'"
             exit 1
           fi
           if [[ "$AGENT" != fake && -z "$PRAXIS_BASE_URL" ]]; then
@@ -175,8 +196,26 @@ jobs:
         shell: bash
         env:
           REPO: ${{ inputs.repo }}
+          HOMEGIT: ${{ inputs.homegit }}
+          AGENT: ${{ inputs.agent }}
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/public-repo.mjs "$REPO"
+        run: |
+          set -euo pipefail
+          node scripts/public-repo.mjs "$REPO"
+          if [[ "$AGENT" == opencode ]]; then
+            node scripts/public-repo.mjs "$HOMEGIT"
+          fi
+
+      # Read-only input to run.mjs, which copies only dotfiles/.config/opencode
+      # to runner-sandbox: the rest of the checkout stays runner's.
+      - name: Check out homegit for the agent's configuration
+        if: ${{ inputs.agent == 'opencode' }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.homegit }}
+          ref: ${{ inputs.homegit_ref }}
+          path: homegit
+          persist-credentials: false
 
       # bot-harness runs as runner, from the checkout. The agent runs as
       # runner-sandbox, which can't read runner's home, so the fake agent
@@ -211,6 +250,7 @@ jobs:
           BUDGET: ${{ inputs.budget }}
           WORKFLOW: ${{ inputs.workflow }}
           BRIEF: ${{ inputs.brief }}
+          HOMEGIT_DIR: ${{ github.workspace }}/homegit
           OUT: ${{ runner.temp }}/agent
         run: node agent/run.mjs
 

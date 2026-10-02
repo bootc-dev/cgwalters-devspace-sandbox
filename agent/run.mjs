@@ -14,13 +14,14 @@
 // protocol stream (acp.jsonl) as the transcript, and writes summary.json.
 //
 // Environment (from the workflow): ITEM REPO BASE AGENT MODEL CORES
-// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, PRAXIS_BASE_URL for agents
-// that need inference, and the GITHUB_* run variables. Everything lands in
+// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, PRAXIS_BASE_URL and HOMEGIT_DIR
+// (the homegit checkout) for agents that need inference, and the GITHUB_*
+// run variables. Everything lands in
 // OUT: run/ (the agent-run artifact) and transcript.tar.zst
 // (agent-transcript).
-import { spawn } from "node:child_process";
-import { appendFileSync, copyFileSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { appendFileSync, copyFileSync, createWriteStream, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { agentCommand, asAgent, killAgent } from "../scripts/agent-lib.mjs";
@@ -39,9 +40,15 @@ const HARNESS_FILES = ["acp.jsonl", "agent-stderr.log", "harness.json"];
 // login: nothing on this runner has a model credential.
 const INFERENCE_AGENTS = ["opencode"];
 const AGENTS = ["fake", ...INFERENCE_AGENTS];
-// opencode's configuration: the broker as its only provider, with a
-// placeholder key (the broker strips it). The base URL is filled in here.
-const OPENCODE_CONFIG = join(ROOT, "agent/opencode.json");
+// opencode's configuration is the bot's own, dotfiles/.config/opencode in
+// the homegit checkout (HOMEGIT_DIR): its providers, model and
+// instructions, as bot-opencode uses locally. Only that directory is copied
+// to runner-sandbox. It must make the praxis broker the only provider;
+// the base URL and sharing are set by OPENCODE_CONFIG_CONTENT, which
+// outranks the file.
+const OPENCODE_CONFIG_DIR = "dotfiles/.config/opencode";
+const OPENCODE_CONFIG_FILE = "opencode.json";
+const PRAXIS_PROVIDER = "praxis";
 // The repository's instructions for agents. opencode doesn't load them
 // itself here (OPENCODE_DISABLE_PROJECT_CONFIG, harness/agents.toml).
 const INSTRUCTION_FILES = { opencode: ["AGENTS.md", "CLAUDE.md"] };
@@ -90,23 +97,96 @@ function validate() {
   if (INFERENCE_AGENTS.includes(env.AGENT) && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(env.PRAXIS_BASE_URL ?? "")) {
     fail(`agent '${env.AGENT}' needs PRAXIS_BASE_URL, the praxis broker's http(s) URL (the repository variable)`);
   }
+  if (env.AGENT === "opencode" && !env.HOMEGIT_DIR) fail("agent 'opencode' needs HOMEGIT_DIR, the homegit checkout with its configuration");
   if (!existsSync(HARNESS_BIN)) fail(`${HARNESS_BIN} is missing (cargo build --release -p bot-harness)`);
 }
 
-// Points the agent at the broker, in runner-sandbox's own configuration.
+// text with the comments and trailing commas of JSONC removed, ready for
+// JSON.parse. String-aware, so a "//" in a URL stays.
+function stripJsonc(text) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end < 0 ? text.length : end + 1;
+    } else out += c;
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+// Checks homegit's opencode configuration: the broker its only provider,
+// so that nothing the checkout holds can send the work elsewhere.
+function checkOpencodeConfig(text) {
+  let config;
+  try {
+    config = JSON.parse(stripJsonc(text));
+  } catch (e) {
+    fail(`homegit's ${OPENCODE_CONFIG_FILE} isn't valid JSONC: ${e.message}`);
+  }
+  const providers = Object.keys(config.provider ?? {});
+  if (JSON.stringify(config.enabled_providers) !== JSON.stringify([PRAXIS_PROVIDER]) || providers.join() !== PRAXIS_PROVIDER) {
+    fail(`homegit's ${OPENCODE_CONFIG_FILE} must enable only the ${PRAXIS_PROVIDER} provider`);
+  }
+}
+
+// The regular files under dir (symlinks followed) as relative paths, each
+// resolved to a real path inside root, so a link can't pull in anything
+// from outside the checkout.
+function configFiles(dir, root) {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    const real = realpathSync(path);
+    const rel = relative(root, real);
+    if (rel === "" || rel.split(sep)[0] === "..") fail(`${path} points outside the homegit checkout`);
+    if (lstatSync(real).isDirectory()) out.push(...configFiles(path, root).map((f) => join(name, f)));
+    else out.push(name);
+  }
+  return out;
+}
+
+// Gives runner-sandbox homegit's opencode configuration (and its global
+// AGENTS.md), and returns the environment that points opencode at the
+// broker: the config file's own baseURL is for the local use.
 function configureInference() {
-  if (env.AGENT !== "opencode") return;
-  const config = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8"));
-  config.provider.praxis.options.baseURL = env.PRAXIS_BASE_URL;
-  const write = asAgent(["sh", "-c", 'mkdir -p "$HOME/.config/opencode" && cat > "$HOME/.config/opencode/opencode.json"'],
-    { input: `${JSON.stringify(config, null, 2)}\n` });
-  if (write.status !== 0) fail("writing runner-sandbox's opencode configuration failed");
+  if (env.AGENT !== "opencode") return {};
+  const root = realpathSync(env.HOMEGIT_DIR);
+  const dir = join(root, OPENCODE_CONFIG_DIR);
+  if (!existsSync(join(dir, OPENCODE_CONFIG_FILE))) fail(`${OPENCODE_CONFIG_DIR}/${OPENCODE_CONFIG_FILE} is missing from ${env.HOMEGIT_DIR}`);
+  checkOpencodeConfig(readFileSync(join(dir, OPENCODE_CONFIG_FILE), "utf8"));
+  const files = configFiles(dir, root);
+  const stage = mkdtempSync(join(env.OUT, "opencode-config-"));
+  try {
+    for (const f of files) {
+      mkdirSync(dirname(join(stage, f)), { recursive: true });
+      copyFileSync(join(dir, f), join(stage, f));
+    }
+    const tar = spawnSync("tar", ["-C", stage, "-cf", "-", "."], { maxBuffer: 1 << 26 });
+    if (tar.status !== 0) fail("packing homegit's opencode configuration failed");
+    const write = asAgent(["sh", "-c", 'mkdir -p "$HOME/.config/opencode" && tar -xf - -C "$HOME/.config/opencode"'], { input: tar.stdout });
+    if (write.status !== 0) fail("writing runner-sandbox's opencode configuration failed");
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+  const head = spawnSync("git", ["-C", root, "log", "-1", "--format=%h %s"], { encoding: "utf8" }).stdout.trim();
+  console.log(`opencode configuration: ${env.HOMEGIT_DIR} (${oneLine(head)}), ${files.join(", ")}`);
+  const overlay = { share: "disabled", provider: { [PRAXIS_PROVIDER]: { options: { baseURL: env.PRAXIS_BASE_URL } } } };
+  return { OPENCODE_CONFIG_CONTENT: JSON.stringify(overlay) };
 }
 
 // Runs the agent through bot-harness, which prints the condensed
 // transcript: redacted here, to the log and CONDENSED. Returns its exit
 // status.
-async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, promptFile }) {
+async function runHarness({ agentEnv, workdir, redact, harnessOut, condensed, stderrLog, promptFile }) {
   // Checked as the agent: the checkout is runner-sandbox's.
   const instructions = (INSTRUCTION_FILES[env.AGENT] ?? [])
     .filter((name) => asAgent(["test", "-f", `${workdir}/${name}`]).status === 0);
@@ -116,7 +196,7 @@ async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, p
   // The agent runs as runner-sandbox, in a session of its own; bot-harness
   // appends its command to this. bot-harness gives it pipes, which run0
   // can't hand to PID 1 from this service (see socket-stdio.mjs).
-  const [sudo, wrapper] = agentCommand([], { cwd: workdir });
+  const [sudo, wrapper] = agentCommand([], { cwd: workdir, env: agentEnv });
   const limit = Number(env.TIMEOUT_MINUTES) * 60 + HARNESS_GRACE_S;
   const harness = spawn("timeout", ["--kill-after=30", `${limit}s`, HARNESS_BIN, "run",
     "--agent", env.AGENT, "--agents", join(HARNESS_DIR, "agents.toml"), ...(env.MODEL ? ["--model", env.MODEL] : []),
@@ -199,14 +279,14 @@ async function main() {
   console.log(`head: ${oneLine(asAgent(["git", "-C", workdir, "log", "-1", "--format=%h %s"]).stdout.toString().trim())}`);
   console.log("::endgroup::");
 
-  configureInference();
+  const agentEnv = configureInference();
   const started = new Date();
   // The condensed lines never span lines and start with bot-harness's own
   // markers, so none can be read as a workflow command.
   console.log(`::group::${LOG_GROUP}`);
   const condensed = join(runDir, "condensed.log");
   const harnessOut = join(work, "harness");
-  const exitCode = await runHarness({ workdir, redact, harnessOut, condensed,
+  const exitCode = await runHarness({ agentEnv, workdir, redact, harnessOut, condensed,
     stderrLog: join(work, "harness-stderr.log"), promptFile: join(work, "prompt.md") });
   // bot-harness says itself why it stopped, unless it was killed.
   if (exitCode !== 0 && !existsSync(join(harnessOut, "harness.json"))) {

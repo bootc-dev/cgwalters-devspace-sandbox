@@ -159,9 +159,15 @@ token-shaped string for the redaction pass to catch.
 on the tailnet, at the `PRAXIS_BASE_URL` repository variable
 (`http://<tailnet IPv4>:<port>/v1`). The broker holds the subscription
 login and runs without client authentication, leaving access to the
-tailnet ACL, so nothing on the runner holds a model credential:
-`agent/opencode.json` makes the broker opencode's only provider, with a
-placeholder key, and `harness/agents.toml` keeps opencode from loading the
+tailnet ACL, so nothing on the runner holds a model credential. opencode's
+configuration is not kept here: the run checks out the `homegit` input
+(default `cgwalters-bot/homegit` at `homegit_ref`, `main`) and gives
+`runner-sandbox` its `dotfiles/.config/opencode`, the configuration the
+bot's local opencode uses too, model included (the `model` input still
+overrides it). The run refuses a configuration that enables any provider
+but the broker, and points the broker's base URL at `PRAXIS_BASE_URL` and
+turns off sharing, whatever the file says. `harness/agents.toml` keeps
+opencode from loading the
 target repository's own configuration (which could bring other providers
 or plugins back). That also means every node with the runners' tag can
 spend the subscription.
