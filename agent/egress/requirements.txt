@@ -1,0 +1,3 @@
+# The egress proxy (scripts/egress-proxy.mjs), installed into its own venv.
+# Renovate keeps the pin current.
+mitmproxy==12.2.3

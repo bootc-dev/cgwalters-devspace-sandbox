@@ -1,0 +1,25 @@
+# The endpoints runner-sandbox may write to through the egress proxy
+# (agent/egress/policy.py): any method but GET, HEAD and OPTIONS, and
+# WebSockets (matched as method WEBSOCKET), need a rule here. Reads are open
+# but for the threat feed. Hosts are exact names (no wildcards: one
+# allowed write host on a shared CDN would be a write channel to all of
+# it). In paths, '*' matches within one segment and '**' across segments;
+# the query string isn't matched. The praxis broker isn't here: the agent
+# reaches it directly, never through the proxy (setup-runner-sandbox.mjs).
+#
+# Each rule is a write channel to whoever controls what it matches, so
+# keep them to read APIs that happen to use POST.
+
+[[write]]
+name = "git fetch (smart HTTP)"
+why = "Fetching and cloning POST to git-upload-pack; pushing (git-receive-pack) stays refused."
+hosts = ["github.com", "gitlab.com", "codeberg.org", "git.kernel.org", "src.fedoraproject.org", "forge.fedoraproject.org"]
+methods = ["POST"]
+paths = ["/**/git-upload-pack"]
+
+[[write]]
+name = "npm audit"
+why = "npm install sends the dependency tree to the registry's advisory API."
+hosts = ["registry.npmjs.org"]
+methods = ["POST"]
+paths = ["/-/npm/v1/security/advisories/bulk", "/-/npm/v1/security/audits/quick"]
