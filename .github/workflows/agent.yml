@@ -92,6 +92,10 @@ jobs:
     runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
     timeout-minutes: 360
     env:
+      # The Rust the agent builds with, installed with rustup (the same
+      # for every target; one with its own rust-toolchain.toml gets that
+      # one, downloaded by rustup). Bump by hand, which also renews the cache.
+      RUST_TOOLCHAIN: "1.99.0"
       # The broker's URL on the tailnet, http://<tailnet IPv4>:<port>/v1.
       # Not a secret; unused by the fake agent.
       PRAXIS_BASE_URL: ${{ inputs.agent != 'fake' && vars.PRAXIS_BASE_URL || '' }}
@@ -227,9 +231,75 @@ jobs:
           cargo build --release --locked -p bot-harness
           sudo install -m 0755 target/release/fake-acp-agent /usr/local/bin/
 
+      # What bootc and composefs-rs-sized targets need to build and test
+      # without the agent installing anything (runner-sandbox has no sudo):
+      # compilers, the C libraries their crates link, and podman.
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dnf install -y --setopt=install_weak_deps=False \
+            gcc gcc-c++ make cmake pkgconf-pkg-config perl-core \
+            openssl-devel libzstd-devel clang clang-devel \
+            ostree-devel glib2-devel libselinux-devel systemd-devel \
+            podman buildah skopeo
+
+      # rustup, system-wide, so that runner-sandbox finds the toolchain
+      # (RUSTUP_HOME, see scripts/runner-sandbox.mjs) but keeps its own
+      # CARGO_HOME. Cached; saved before the agent runs, so nothing it does
+      # ends up in the cache.
+      - name: Prepare the Rust toolchain directories
+        shell: bash
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/rustup /opt/cargo
+
+      - name: Restore the Rust toolchain cache
+        id: rust-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            /opt/rustup
+            /opt/cargo
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}
+
+      - name: Install the Rust toolchain
+        if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          /opt/cargo/bin/rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+          /opt/cargo/bin/rustup default "$RUST_TOOLCHAIN"
+
+      - name: Save the Rust toolchain cache
+        if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            /opt/rustup
+            /opt/cargo
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+      # rustup's proxies, ahead of the dnf cargo on runner-sandbox's PATH.
+      - name: Put the Rust toolchain on the PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in cargo rustc rustdoc rustfmt cargo-fmt cargo-clippy clippy-driver rustup; do
+            sudo ln -sfn /opt/cargo/bin/rustup "/usr/local/bin/$tool"
+          done
+          sudo chmod -R a+rX /opt/cargo
+
       - name: Create the unprivileged runner-sandbox user
         shell: bash
         run: sudo node scripts/setup-runner-sandbox.mjs ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"}
+
+      # Its own, so that a target's rust-toolchain.toml can add a toolchain.
+      - name: Give runner-sandbox the Rust toolchain
+        shell: bash
+        run: sudo chown -R runner-sandbox:runner-sandbox /opt/rustup
 
       - name: Check the runner-sandbox user's isolation
         shell: bash

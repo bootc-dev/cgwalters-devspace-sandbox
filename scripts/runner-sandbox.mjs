@@ -6,6 +6,9 @@ import { spawnSync } from "node:child_process";
 export const SANDBOX_USER = "runner-sandbox";
 export const SANDBOX_HOME = `/home/${SANDBOX_USER}`;
 const SANDBOX_PATH = "/usr/local/bin:/usr/bin:/bin";
+// Where agent.yml installs the Rust toolchain (rustup's proxies are in
+// /usr/local/bin); CARGO_HOME stays the user's own, in its home.
+const RUSTUP_HOME = "/opt/rustup";
 // run0 sets these as sudo would, and tools that see them may act as if run
 // under sudo; --setenv can't unset them.
 const SUDO_VARS = ["SUDO_USER", "SUDO_UID", "SUDO_GID"];
@@ -37,7 +40,7 @@ export function run(cmd, args, { input } = {}) {
 // files, and SELinux keeps PID 1 from reading a pipe this service made.
 // spawnSync's 'pipe' stdio is a socketpair; elsewhere, scripts/socket-stdio.mjs.
 export function sandboxCommand(cmd, { cwd = SANDBOX_HOME, env = {} } = {}) {
-  const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, ...env };
+  const vars = { LANG: "C.UTF-8", PATH: SANDBOX_PATH, RUSTUP_HOME, ...env };
   // Unlike systemd-run --collect, run0 leaves a failed unit behind for
   // every command that exits nonzero.
   const argv = ["run0", "--pipe", "--no-ask-password", "--shell-prompt-prefix=", `--user=${SANDBOX_USER}`,
