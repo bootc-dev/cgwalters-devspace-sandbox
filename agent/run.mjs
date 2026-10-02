@@ -50,6 +50,12 @@ const HARNESS_GRACE_S = 90;
 const LOG_GROUP = "agent (condensed)";
 // Largest outcome.json taken from the agent.
 const MAX_OUTCOME_BYTES = 65536;
+// Largest change a branch run hands back (agent-out/changes.patch); a
+// bigger one is dropped and the run says so.
+const MAX_PATCH_BYTES = 8 << 20;
+// Git, run as the agent on its checkout: none of the checkout's own hooks
+// or fsmonitor.
+const AGENT_GIT = ["timeout", "120", "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
 const EXIT_TIMEOUT = 124;
 // Egress is open, so nothing is denied; summary.json keeps the field.
 const EGRESS_DENIED = [];
@@ -134,7 +140,7 @@ async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, p
 
 // Collects what the agent left, reading its files as the agent: as root, a
 // link planted there could copy the runner's secrets into an artifact.
-function collect({ workdir, runDir }) {
+function collect({ workdir, runDir, outDir }) {
   const status = asAgent(["timeout", "60", "git", "-c", "core.fsmonitor=false", "-C", workdir,
     "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
   const files = status.status === 0
@@ -150,8 +156,27 @@ function collect({ workdir, runDir }) {
     } catch { /* not JSON: none */ }
   }
   writeFileSync(join(runDir, "outcome.json"), `${JSON.stringify(outcome)}\n`);
+  const patch = env.WORKFLOW === "branch" && files.length > 0 ? collectPatch({ workdir, outDir }) : null;
   killAgent();
-  return files;
+  return { files, patch };
+}
+
+// A branch run's change, as a binary git diff against the commit it
+// started from, for bot-runs apply to check again and turn into a branch:
+// the runner has no credentials to push one. Untracked files are included
+// (intent-to-add); nothing is committed. Returns what summary.json says
+// about it.
+function collectPatch({ workdir, outDir }) {
+  const git = (...args) => asAgent([...AGENT_GIT, "-C", workdir, ...args]);
+  const base = git("rev-parse", "HEAD").stdout.toString().trim();
+  if (git("add", "--intent-to-add", "--all").status !== 0) return { error: "git add -N failed" };
+  const diff = asAgent(["sh", "-c", `"$@" | head -c ${MAX_PATCH_BYTES + 1}`, "sh",
+    ...AGENT_GIT, "-C", workdir, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"]);
+  if (diff.status !== 0) return { error: "git diff failed" };
+  if (diff.stdout.length > MAX_PATCH_BYTES) return { base, error: `the change is over ${MAX_PATCH_BYTES} bytes` };
+  writeFileSync(join(outDir, "changes.patch"), diff.stdout);
+  writeFileSync(join(outDir, "base.json"), `${JSON.stringify({ repo: env.REPO, ref: env.BASE, commit: base })}\n`);
+  return { base, bytes: diff.stdout.length };
 }
 
 async function main() {
@@ -159,8 +184,10 @@ async function main() {
   const out = env.OUT;
   const runDir = join(out, "run");
   const tx = join(out, "transcript");
+  // agent-out: what a branch run hands back (bot-runs apply).
+  const outDir = join(out, "agent-out");
   const work = join(out, "work");
-  for (const dir of [runDir, tx, work]) mkdirSync(dir, { recursive: true });
+  for (const dir of [runDir, tx, work, outDir]) mkdirSync(dir, { recursive: true });
   const workdir = `${SANDBOX_HOME}/work/${env.REPO.split("/")[1]}`;
   const redact = makeRedactor(TOKEN_VARS.map((name) => env[name]).filter(Boolean));
   process.on("exit", killAgent);
@@ -192,7 +219,8 @@ async function main() {
   killAgent();
 
   console.log("::group::Collect the run's files");
-  const files = collect({ workdir, runDir });
+  const { files, patch } = collect({ workdir, runDir, outDir });
+  if (patch?.error) console.log(`::warning::no change handed back: ${patch.error}`);
   for (const f of [...HARNESS_FILES.map((name) => join(harnessOut, name)), join(work, "harness-stderr.log")]) {
     if (existsSync(f)) copyFileSync(f, join(tx, basename(f)));
   }
@@ -208,7 +236,7 @@ async function main() {
     cores: Number(env.CORES), started_at: started.toISOString().replace(/\.\d+Z$/, "Z"),
     finished_at: finished.toISOString().replace(/\.\d+Z$/, "Z"),
     duration_s: Math.round((finished - started) / 1000), exit_code: exitCode, aic_budget: Number(env.BUDGET),
-    aic_pricing: AIC_PRICING[env.AGENT], files, egress_denied: EGRESS_DENIED, redactions: redact.count,
+    aic_pricing: AIC_PRICING[env.AGENT], files, patch, egress_denied: EGRESS_DENIED, redactions: redact.count,
   };
   const metaFile = join(work, "meta.json");
   writeFileSync(metaFile, JSON.stringify(meta));

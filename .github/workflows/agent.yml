@@ -240,3 +240,13 @@ jobs:
           path: ${{ runner.temp }}/agent/transcript.tar.zst
           retention-days: 30
           if-no-files-found: error
+
+      # A branch run's change (changes.patch, base.json), for bot-runs apply.
+      - name: Upload the change
+        if: ${{ !cancelled() && steps.uploads.outcome == 'success' && inputs.workflow == 'branch' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent/agent-out/
+          retention-days: 30
+          if-no-files-found: ignore

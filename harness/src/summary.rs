@@ -33,6 +33,7 @@ const META_FIELDS: &[&str] = &[
     "aic_budget",
     "aic_pricing",
     "files",
+    "patch",
     "egress_denied",
     "redactions",
 ];

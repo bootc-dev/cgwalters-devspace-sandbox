@@ -139,7 +139,12 @@ for every agent.
 The condensed transcript streams into the job log in an `agent (condensed)`
 group, and the `agent-run` (90 days) and `agent-transcript` (30 days)
 artifacts hold the rest, redacted by `agent/redact.mjs` and checked for
-anything secret-shaped before upload. The files and the dispatch inputs
+anything secret-shaped before upload. A `branch` run that changed files
+also uploads `agent-out` (30 days): `changes.patch`, a binary git diff
+against the commit in `base.json`. It isn't redacted, so a secret-shaped
+string in it fails the upload. The runner can't push, so homegit's
+`bot-runs apply` checks the patch again and turns it into a branch on the
+forge. The files and the dispatch inputs
 follow the
 [agent runs contract](https://github.com/cgwalters-bot/homegit/blob/main/docs/devspace-agent-runs.md),
 and homegit's `bot-runs` dispatches and reads the runs.
