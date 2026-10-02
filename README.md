@@ -136,6 +136,14 @@ the cost it reports, or a number of tool calls. `bot-harness summary` then
 writes `summary.json` and the step summary from the recording, the same way
 for every agent.
 
+`bot-runs dispatch` in `cgwalters-bot/homegit` puts homegit's runner-side
+worker brief (`dotfiles/.agents/skills/coordinator/runner-preamble.md`) before
+the task, so the agent knows it has no credentials and that its only outputs
+are the working tree and `~/out/outcome.json`. `agent/run.mjs` turns the
+working tree into `agent-out/changes.patch` for branch runs. It keeps
+`outcome.json` in the `agent-run` artifact and copies its `tests` into
+`summary.json`.
+
 The condensed transcript streams into the job log in an `agent (condensed)`
 group, and the `agent-run` (90 days) and `agent-transcript` (30 days)
 artifacts hold the rest, redacted by `agent/redact.mjs` and checked for
