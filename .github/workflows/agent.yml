@@ -12,7 +12,10 @@ run-name: "agent ${{ inputs.item }} ${{ inputs.repo }}"
 # the subscription login, so no model credential reaches this runner. The
 # job's only credentials are its OIDC tokens, for the tailnet login and to
 # register a praxis run (agent/praxis.mjs), which caps and counts the
-# agent's tokens; the agent gets only that run's token.
+# agent's tokens; the agent gets only that run's token. The agent reaches
+# the network only through an egress proxy (scripts/egress-proxy.mjs),
+# which leaves reads open and allows writes only to listed endpoints, and
+# the broker directly.
 on:
   workflow_dispatch:
     inputs:
@@ -115,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo dnf install -y git curl zstd podman nodejs npm cargo
+          sudo dnf install -y git curl zstd podman nodejs npm cargo python3 python3-pip
 
       - name: Install opencode
         if: ${{ inputs.agent == 'opencode' }}
@@ -188,9 +191,19 @@ jobs:
           cargo build --release --locked -p bot-harness
           sudo install -m 0755 target/release/fake-acp-agent /usr/local/bin/
 
+      # mitmproxy, with agent/egress/policy.toml, as its own user: reads are
+      # open but for a threat feed, writes go only to listed endpoints, and
+      # its access log (no headers or query strings) goes into the
+      # transcript.
+      - name: Start the egress proxy
+        shell: bash
+        run: sudo node scripts/egress-proxy.mjs start
+
+      # --egress-proxy: runner-sandbox's uids reach the network only through
+      # the proxy, and the broker (--tailnet-allow) directly.
       - name: Create the unprivileged runner-sandbox user
         shell: bash
-        run: sudo node scripts/setup-runner-sandbox.mjs ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"}
+        run: sudo node scripts/setup-runner-sandbox.mjs --egress-proxy ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"}
 
       # The broker admits only requests with the token of a run registered
       # with an OIDC token from this workflow (POST /v1/runs), and caps and
@@ -231,7 +244,7 @@ jobs:
           if [[ "$AGENT" != fake && ! -e "$PRAXIS_DIR/legacy-broker" ]]; then
             token_args=(--run-token-file "$PRAXIS_DIR/run-token")
           fi
-          node scripts/agent-isolation-check.mjs ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"} "${token_args[@]}" https://github.com/
+          node scripts/agent-isolation-check.mjs --egress-proxy ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"} "${token_args[@]}" https://github.com/
 
       - name: Run the agent
         id: agent

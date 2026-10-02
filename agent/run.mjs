@@ -25,6 +25,7 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { agentCommand, asAgent, killAgent } from "../scripts/agent-lib.mjs";
+import { collect as collectEgressLog, logOffset as egressLogOffset } from "../scripts/egress-proxy.mjs";
 import { SANDBOX_HOME, fail, run } from "../scripts/runner-sandbox.mjs";
 import { USAGE_FILE, finish as finishPraxisRun, runToken } from "./praxis.mjs";
 import { makeRedactor, redactTree } from "./redact.mjs";
@@ -57,8 +58,8 @@ const MAX_PATCH_BYTES = 8 << 20;
 // or fsmonitor.
 const AGENT_GIT = ["timeout", "120", "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
 const EXIT_TIMEOUT = 124;
-// Egress is open, so nothing is denied; summary.json keeps the field.
-const EGRESS_DENIED = [];
+// The egress proxy's access log, in the transcript (scripts/egress-proxy.mjs).
+const ACCESS_LOG = "access.log";
 // How a run's AIC is priced: the fake agent reports a made-up cost, and
 // subscription inference through the broker has none per token (the
 // broker caps and counts the run's tokens instead).
@@ -190,6 +191,9 @@ async function main() {
   // run0, which passes none of it on anyway).
   for (const name of Object.keys(env).filter((k) => k.startsWith("ACTIONS_"))) delete env[name];
   process.on("exit", killAgent);
+  // The egress proxy's log from here on is this run's: the isolation
+  // check's probes came before.
+  const egressFrom = egressLogOffset();
 
   console.log(`::group::Check out ${env.REPO} (${env.BASE}) as runner-sandbox`);
   asAgent(["mkdir", "-p", `${SANDBOX_HOME}/work`, `${SANDBOX_HOME}/out`]);
@@ -233,6 +237,8 @@ async function main() {
   for (const f of [...HARNESS_FILES.map((name) => join(harnessOut, name)), join(work, "harness-stderr.log")]) {
     if (existsSync(f)) copyFileSync(f, join(tx, basename(f)));
   }
+  // What the agent reached, and what it was refused (none without a proxy).
+  const egressDenied = collectEgressLog(join(tx, ACCESS_LOG), egressFrom) ?? [];
   redactTree(redact, [tx, runDir]);
   console.log("::endgroup::");
 
@@ -245,7 +251,7 @@ async function main() {
     cores: Number(env.CORES), started_at: started.toISOString().replace(/\.\d+Z$/, "Z"),
     finished_at: finished.toISOString().replace(/\.\d+Z$/, "Z"),
     duration_s: Math.round((finished - started) / 1000), exit_code: exitCode, aic_budget: Number(env.BUDGET),
-    aic_pricing: AIC_PRICING[env.AGENT], files, patch, egress_denied: EGRESS_DENIED, redactions: redact.count,
+    aic_pricing: AIC_PRICING[env.AGENT], files, patch, egress_denied: egressDenied, redactions: redact.count,
   };
   const metaFile = join(work, "meta.json");
   writeFileSync(metaFile, JSON.stringify(meta));
