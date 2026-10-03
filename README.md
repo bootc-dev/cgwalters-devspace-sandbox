@@ -2,7 +2,7 @@
 
 This repository dispatches a bounded, disposable RHEL 10 development runner.
 Tailscale supplies private networking inside the remote workflow; access is
-ordinary OpenSSH as user `runner`.
+ordinary OpenSSH as the unprivileged user `runner-sandbox`.
 
 ## Prerequisites
 
@@ -55,15 +55,50 @@ The workflow runs stock `sshd.service`, binds it only to the Tailscale IPv4
 address, and enforces a public-key-only configuration. Its keepalive verifies
 the service, SELinux context, and bound address every five seconds.
 
+SSH sessions run as `runner-sandbox`, which has no sudo, so builds and tests
+started over SSH can't reach the job's credentials. Every workflow step runs as
+`runner`, which has passwordless sudo, and the running steps' environments hold
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN`; with it, any process of that user could mint
+the GitHub OIDC tokens the Tailscale login trusts.
+`scripts/setup-runner-sandbox.mjs` creates `runner-sandbox` (in the `kvm` group
+and with subordinate IDs, so rootless podman and KVM work; not in `libvirt`,
+whose `qemu:///system` access is root-equivalent). That uid separation is the
+boundary; otherwise the stock runner setup stays, except for real exposures of
+an image built with umask 000: the runner's credentials are world-readable (so
+its home directory and `/opt/hca` become private), and system files root loads
+code from, such as polkit rules, are world-writable (so world write permission
+is removed). `/etc/environment` also loses its `XDG_RUNTIME_DIR`, which pointed
+every login at runner's runtime directory; that should be fixed in the runner
+image instead
+([actions/runner-images#14649](https://github.com/actions/runner-images/issues/14649)).
+Workflow steps run commands as `runner-sandbox` through
+`scripts/runner-sandbox.mjs`, with `run0`: a login session of its own like an
+SSH login's (its own `XDG_RUNTIME_DIR` and systemd user manager, for rootless
+podman) and a fixed environment, so nothing of the step's environment comes
+along.
+
+On top of that, a sudoers rule denies `runner-sandbox` everything, and so does
+a polkit rule (when polkit is installed), which also covers `pkexec`. The
+long-running keepalive step re-executes itself without the request token, so
+the Tailscale login is its one use (`tailscaled`, which the Tailscale action
+starts with `sudo -E`, still has it in its environment, readable only by root),
+`ptrace_scope` is 1, Cockpit is off, and `runner-sandbox` can't reach the cloud
+metadata service. Nor can it use tailscaled's LocalAPI socket, which is
+world-writable and would let any user dial through the node (`tailscale nc`)
+and list the tailnet: `/var/run/tailscale` is root's only.
+Rootless VMs (`bcvk ephemeral`, `qemu:///session`) work; anything that needs
+root must run inside a VM. The toolchain in `packages.txt` is installed before
+OpenSSH starts, since sessions can't install packages themselves.
+
 The runner hosts [cgwalters-bot](https://github.com/cgwalters-bot) agent
 sessions. Before OpenSSH is made available, it automatically installs the bot's
 [homegit](https://github.com/cgwalters-bot/homegit) dotfiles, skills, and agent
-configuration. Because the runner executes homegit code, it is pinned to the
-commit in the `Justfile`'s `homegit_rev`, which Renovate bumps through
+configuration for `runner-sandbox`. Because the runner executes homegit code, it is
+pinned to the commit in the `Justfile`'s `homegit_rev`, which Renovate bumps through
 reviewed pull requests. The checkout is created at
 `$HOME/src/github/cgwalters-bot/homegit` when absent, and existing checkouts
 are moved to the pinned commit, fetching it if needed. Interactive users on the
-runner therefore get the bot's git identity from its `.gitconfig`.
+devspace therefore get the bot's git identity from its `.gitconfig`.
 
 The opencode and Claude Code agent CLIs are preinstalled globally with npm
 (from the RHEL `nodejs` package). Their exact versions are pinned in `npm.txt`,
@@ -73,5 +108,10 @@ EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
 
 ## TODO / roadmap
 
+- Move the `runner-sandbox` setup into
+  [bootc-dev/actions](https://github.com/bootc-dev/actions)' `bootc-host-setup`
+  action, on by default, so CI jobs get the same unprivileged user.
+- Align `packages.txt` with what `bootc-ubuntu-setup` installs, or switch to a
+  devcontainer with the podman socket mounted in.
 - Later, support launching an agent that can work autonomously and push changes
   with safe, scoped credentials, while preserving interactive access.

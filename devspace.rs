@@ -16,6 +16,9 @@ use xshell::{Shell, cmd};
 const REPO: &str = "bootc-dev/cgwalters-devspace-sandbox";
 const WORKFLOW: &str = "devspace.yml";
 const WORKFLOW_NAME: &str = "Development runner";
+/// The unprivileged account OpenSSH admits; the workflow's `runner` account
+/// holds the job's credentials and passwordless sudo.
+const SSH_USER: &str = "runner-sandbox";
 const WAIT: Duration = Duration::from_secs(180);
 
 #[derive(Parser, Debug)]
@@ -404,7 +407,7 @@ fn ssh_command(key: &Path, known_hosts: &Path, host: &str) -> Vec<String> {
         "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
         "IdentitiesOnly=yes".into(),
-        format!("runner@{host}"),
+        format!("{SSH_USER}@{host}"),
     ]
 }
 fn ssh_probe_command(key: &Path, known_hosts: &Path, host: &str) -> Vec<String> {
@@ -832,7 +835,7 @@ mod tests {
         let argv = ssh_command(&key, &dir.join("known hosts"), &hostname(7));
         assert!(argv.contains(&"StrictHostKeyChecking=accept-new".into()));
         assert!(argv.contains(&"IdentitiesOnly=yes".into()));
-        assert_eq!(argv.last().unwrap(), "runner@cgwalters-devspace-7");
+        assert_eq!(argv.last().unwrap(), "runner-sandbox@cgwalters-devspace-7");
         let probe = ssh_probe_command(&key, &dir.join("known hosts"), &hostname(7));
         assert!(probe.contains(&"BatchMode=yes".into()));
         assert!(probe.contains(&"ConnectTimeout=8".into()));
@@ -1075,7 +1078,7 @@ mod tests {
         };
         let run = |value: &serde_yaml::Value| value["run"].as_str().unwrap().to_string();
         // (step name, expected run snippets), in the order the steps must run.
-        let expected: [(&str, &[&str]); 5] = [
+        let expected: [(&str, &[&str]); 6] = [
             (
                 "Install development prerequisites",
                 &[
@@ -1093,10 +1096,22 @@ mod tests {
                 ],
             ),
             (
-                "Initialize runner configuration",
-                &["sudo -u runner -H just init"],
+                "Install the development toolchain",
+                &["packages.txt | xargs sudo dnf install -y"],
             ),
-            ("Prepare OpenSSH and keep the devspace available", &[]),
+            (
+                "Create and initialize the unprivileged runner-sandbox user",
+                &["sudo node scripts/setup-runner-sandbox.mjs --init Justfile"],
+            ),
+            (
+                "Prepare OpenSSH and keep the devspace available",
+                &[
+                    "exec env \"${scrub[@]/#/--unset=}\" bash",
+                    "sudo systemctl restart sshd.service",
+                    &format!("AllowUsers {SSH_USER}\n"),
+                    "AuthorizedKeysFile /etc/ssh/devspace-authorized_keys",
+                ],
+            ),
         ];
         let mut previous = None;
         for (name, snippets) in expected {
@@ -1111,9 +1126,14 @@ mod tests {
             }
         }
         let (_, checkout) = step("Check out devspace configuration");
-        assert_eq!(
-            checkout["uses"].as_str(),
-            Some("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683")
+        // A major version tag, which Renovate keeps current.
+        let version = checkout["uses"]
+            .as_str()
+            .and_then(|uses| uses.strip_prefix("actions/checkout@v"))
+            .unwrap();
+        assert!(
+            !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit()),
+            "{version}"
         );
         assert_eq!(
             checkout["with"]["persist-credentials"].as_bool(),
