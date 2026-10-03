@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The gate before agent.yml uploads anything, all public: the target must
 // still be a public repository (fail closed), and no secret-shaped string
-// may have survived redaction, in the run summary, the transcript or a
-// branch run's change (agent-out). Once
+// may have survived redaction, in the run summary, the transcript or what
+// the run hands back (safe-outputs). Once
 // that holds, it publishes the step summary (the run's summary.md).
 //   check-uploads.mjs OUT REPO    (AGENT, GH_TOKEN from the workflow)
 import { spawnSync } from "node:child_process";
@@ -26,10 +26,10 @@ const files = readdirSync(runDir).map((name) => [name, readFileSync(join(runDir,
 const tar = spawnSync("tar", ["--zstd", "-xOf", join(out, "transcript.tar.zst")], { maxBuffer: 1 << 30 });
 if (tar.status !== 0) fail("can't read the transcript");
 files.push(["transcript.tar.zst", tar.stdout]);
-// A branch run's change is uploaded as is (redacting it would corrupt it),
-// so a secret-shaped string in it fails the run instead.
-const outDir = join(out, "agent-out");
-if (existsSync(outDir)) files.push(...readdirSync(outDir).map((name) => [`agent-out/${name}`, readFileSync(join(outDir, name))]));
+// A patch is uploaded as is (redacting it would corrupt it), so a
+// secret-shaped string in the safe outputs fails the run instead.
+const outDir = join(out, "safe-outputs");
+if (existsSync(outDir)) files.push(...readdirSync(outDir).map((name) => [`safe-outputs/${name}`, readFileSync(join(outDir, name))]));
 for (const [name, content] of files) {
   if (secret.test(content.toString("latin1"))) fail(`a secret-shaped string survived redaction in ${name}`);
 }

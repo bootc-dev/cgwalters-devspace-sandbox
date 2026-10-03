@@ -176,20 +176,14 @@ for every agent.
 `bot-runs dispatch` in `cgwalters-bot/homegit` puts homegit's runner-side
 worker brief (`dotfiles/.agents/skills/coordinator/runner-preamble.md`) before
 the task, so the agent knows it has no credentials and that its only outputs
-are the working tree and `~/out/outcome.json`. `agent/run.mjs` turns the
-working tree into `agent-out/changes.patch` for branch runs. It keeps
-`outcome.json` in the `agent-run` artifact and copies its `tests` into
-`summary.json`.
+are the working tree, `~/out/outcome.json` and `~/out/safe-outputs.jsonl`.
+`agent/run.mjs` keeps `outcome.json` in the `agent-run` artifact and copies
+its `tests` into `summary.json`, and turns the rest into safe outputs (below).
 
 The condensed transcript streams into the job log in an `agent (condensed)`
 group, and the `agent-run` (90 days) and `agent-transcript` (30 days)
 artifacts hold the rest, redacted by `agent/redact.mjs` and checked for
-anything secret-shaped before upload. A `branch` run that changed files
-also uploads `agent-out` (30 days): `changes.patch`, a binary git diff
-against the commit in `base.json`. It isn't redacted, so a secret-shaped
-string in it fails the upload. The runner can't push, so homegit's
-`bot-runs apply` checks the patch again and turns it into a branch on the
-forge. The files and the dispatch inputs
+anything secret-shaped before upload. The files and the dispatch inputs
 follow the
 [agent runs contract](https://github.com/cgwalters-bot/homegit/blob/main/docs/devspace-agent-runs.md),
 and homegit's `bot-runs` dispatches and reads the runs.
@@ -259,6 +253,63 @@ may still work.
 The harness lives here, next to `agent.yml`, until the
 [task harness design](https://gist.github.com/cgwalters-bot/290d1fbd3545e430f7717948caab260f)
 settles where tasks and their tools belong.
+
+## Safe outputs
+
+What a run may hand back follows [gh-aw's safe
+outputs](https://github.github.com/gh-aw/reference/safe-outputs/), so that
+the swap to the gh-aw fork's sandbox mode changes who applies the output,
+not its format. The agent asks for things as JSONL, one typed request per
+line (`create_pull_request`, `add_comment`, `noop`, `missing_tool`,
+`missing_data`), in `~/out/safe-outputs.jsonl`. For a pull request the
+supervisor makes the patch itself (`agent/handback.mjs`): one `git
+format-patch` commit of the working tree against the commit the run
+started from, with gh-aw's `X-GH-AW-Base-Commit` header, named
+`aw-agent-run-RUNID.patch`; a change the agent didn't ask a pull request
+for gets one made from `outcome.json`'s summary. The `safe-outputs`
+artifact (30 days) holds `outputs.jsonl`, the patch and `base.json`
+(`{repo, ref, commit}`). It isn't redacted (that would corrupt a patch),
+so a secret-shaped string in it fails the upload instead.
+
+The restrictions are `workflow_dispatch` inputs: `repo`, `base`, `outputs`
+(the types the run may hand back) and `max_outputs`. The first job,
+`Restrictions`, checks them against the static
+`safe-outputs/allowlist.json` (owners, bases, types, per-type maximums)
+before a runner is spent on the agent, and compiles them to gh-aw's
+safe-outputs configuration (`policy.json`, whose `safe_outputs` is the
+`config.json` gh-aw's compiler writes). The last job, `Safe outputs`,
+runs on a fresh runner that never ran the agent and checks the artifact
+with gh-aw's own code; `bot-runs apply` in homegit checks it again, from
+this repository's commit that ran, before turning the pull request into a
+draft on the forge. Nothing here creates anything: the runner holds no
+credentials.
+
+`safe-outputs/safe-outputs.mjs` is the glue; the checks themselves are gh-aw's,
+vendored byte for byte in `vendor/gh-aw/` (`UPSTREAM.json` names the
+commit of [cgwalters-forge/gh-aw](https://github.com/cgwalters-forge/gh-aw)
+and every file's sha256; `scripts/vendor-gh-aw.mjs` refreshes it, and a
+test fails if a file drifts):
+
+- `collect_ndjson_output.cjs` and what it requires (the sanitizer, the
+  per-type validator, `repo_helpers.cjs`...): parses the JSONL, refuses
+  types and counts over the policy, validates and sanitizes every field.
+  It is written for `actions/github-script`; the glue stands in for its
+  globals and nothing else of it is changed.
+- `validation.json`: the compiler's per-type validation rules
+  (`GH_AW_VALIDATION_JSON` of its compiled lock files), and
+  `protected-files.json`, the compiler's default protected-files lists for
+  `create_pull_request`.
+- `manifest_file_helpers.cjs` (`checkFileProtection`,
+  `checkFileProtectionPostApply`), `patch_path_helpers.cjs` and
+  `commit_sha_helpers.cjs`: the protected-files policy (`blocked`: README.md,
+  AGENTS.md, manifests, CODEOWNERS and top-level dot-folders such as `.github/`
+  can't be changed), and reading a patch's paths and base commit.
+
+Not in gh-aw, so here: secret-shaped strings in a patch, symlinks,
+submodules, binaries, mode changes and new executables, plain relative
+paths, and the git, CI and hook paths its protection doesn't name. The
+unique-file count is `create_pull_request.cjs`'s `enforcePullRequestLimits`,
+which can't be loaded without the rest of that handler.
 
 ## TODO / roadmap
 

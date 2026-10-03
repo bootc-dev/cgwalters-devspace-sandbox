@@ -14,11 +14,14 @@
 // protocol stream (acp.jsonl) as the transcript, and writes summary.json.
 //
 // Environment (from the workflow): ITEM REPO BASE AGENT MODEL CORES
-// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT, PRAXIS_BASE_URL and PRAXIS_DIR
+// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT POLICY (the run's safe-outputs
+// policy, compiled from the dispatch inputs by safe-outputs/safe-outputs.mjs),
+// PRAXIS_BASE_URL and PRAXIS_DIR
 // (agent/praxis.mjs, which registered the run and configured the agent)
 // for agents that need inference, and the GITHUB_* run variables.
-// Everything lands in OUT: run/ (the agent-run artifact) and
-// transcript.tar.zst (agent-transcript).
+// Everything lands in OUT: run/ (the agent-run artifact), safe-outputs/
+// (the safe-outputs artifact: what the agent asked to have done, see
+// handback.mjs) and transcript.tar.zst (agent-transcript).
 import { spawn } from "node:child_process";
 import { appendFileSync, copyFileSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -28,6 +31,7 @@ import { agentCommand, asAgent, killAgent } from "../scripts/agent-lib.mjs";
 import { collect as collectEgressLog, logOffset as egressLogOffset } from "../scripts/egress-proxy.mjs";
 import { SANDBOX_HOME, fail, run } from "../scripts/runner-sandbox.mjs";
 import { USAGE_FILE, finish as finishPraxisRun, runToken } from "./praxis.mjs";
+import { writeHandback } from "./handback.mjs";
 import { makeRedactor, redactTree } from "./redact.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,9 +55,10 @@ const HARNESS_GRACE_S = 90;
 const LOG_GROUP = "agent (condensed)";
 // Largest outcome.json taken from the agent.
 const MAX_OUTCOME_BYTES = 65536;
-// Largest change a branch run hands back (agent-out/changes.patch); a
-// bigger one is dropped and the run says so.
-const MAX_PATCH_BYTES = 8 << 20;
+// What the agent writes its safe-outputs requests to (JSONL), in its home.
+const AGENT_OUTPUTS = `${SANDBOX_HOME}/out/safe-outputs.jsonl`;
+// Largest requests file taken from the agent (the check refuses a bigger one).
+const MAX_AGENT_OUTPUTS_BYTES = 1 << 20;
 // Git, run as the agent on its checkout: none of the checkout's own hooks
 // or fsmonitor.
 const AGENT_GIT = ["timeout", "120", "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
@@ -66,7 +71,7 @@ const ACCESS_LOG = "access.log";
 const AIC_PRICING = { fake: "mock", opencode: "subscription" };
 // The values of whatever tokens this step can see, for redaction.
 const TOKEN_VARS = ["ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN"];
-const REQUIRED = ["ITEM", "REPO", "BASE", "AGENT", "CORES", "TIMEOUT_MINUTES", "BUDGET", "WORKFLOW", "BRIEF", "OUT",
+const REQUIRED = ["ITEM", "REPO", "BASE", "AGENT", "CORES", "TIMEOUT_MINUTES", "BUDGET", "WORKFLOW", "BRIEF", "OUT", "POLICY",
   "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SERVER_URL", "GITHUB_REPOSITORY"];
 
 const env = process.env;
@@ -134,12 +139,16 @@ async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, p
 
 // Collects what the agent left, reading its files as the agent: as root, a
 // link planted there could copy the runner's secrets into an artifact.
-function collect({ workdir, runDir, outDir }) {
-  const status = asAgent(["timeout", "60", "git", "-c", "core.fsmonitor=false", "-C", workdir,
-    "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
+// BASE is the commit the checkout started from.
+function collect({ workdir, base, runDir, outDir, policy }) {
+  const git = (args, { limit } = {}) => asAgent(limit
+    ? ["sh", "-c", `"$@" | head -c ${limit}`, "sh", ...AGENT_GIT, "-C", workdir, ...args]
+    : [...AGENT_GIT, "-C", workdir, ...args]);
+  const status = git(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
   const files = status.status === 0
     ? status.stdout.toString().split("\0").filter((e) => e.length > 3).map((e) => e.slice(3)).sort() : [];
-  killAgent();
+  // Commits of its own count as changes too (it was asked not to make any).
+  const head = git(["rev-parse", "HEAD"]).stdout.toString().trim();
   // The agent's own outcome, if it's a JSON object of sane size.
   let outcome = {};
   const out = asAgent(["head", "-c", String(MAX_OUTCOME_BYTES + 1), `${SANDBOX_HOME}/out/outcome.json`]);
@@ -150,27 +159,17 @@ function collect({ workdir, runDir, outDir }) {
     } catch { /* not JSON: none */ }
   }
   writeFileSync(join(runDir, "outcome.json"), `${JSON.stringify(outcome)}\n`);
-  const patch = env.WORKFLOW === "branch" && files.length > 0 ? collectPatch({ workdir, outDir }) : null;
+  const requests = asAgent(["head", "-c", String(MAX_AGENT_OUTPUTS_BYTES + 1), AGENT_OUTPUTS]);
+  const agentText = requests.status === 0 && requests.stdout.length <= MAX_AGENT_OUTPUTS_BYTES ? requests.stdout.toString() : "";
+  const hasChanges = files.length > 0 || (head !== "" && head !== base);
+  // The requests and the change of a run that has outputs to hand back; an
+  // analysis run's change is not handed back.
+  const patch = env.WORKFLOW === "branch" || agentText !== ""
+    ? writeHandback({ outDir, git, agentText, policy, repo: env.REPO, ref: env.BASE, base, runId: env.GITHUB_RUN_ID,
+      outcome, hasChanges: hasChanges && env.WORKFLOW === "branch" })
+    : null;
   killAgent();
   return { files, patch };
-}
-
-// A branch run's change, as a binary git diff against the commit it
-// started from, for bot-runs apply to check again and turn into a branch:
-// the runner has no credentials to push one. Untracked files are included
-// (intent-to-add); nothing is committed. Returns what summary.json says
-// about it.
-function collectPatch({ workdir, outDir }) {
-  const git = (...args) => asAgent([...AGENT_GIT, "-C", workdir, ...args]);
-  const base = git("rev-parse", "HEAD").stdout.toString().trim();
-  if (git("add", "--intent-to-add", "--all").status !== 0) return { error: "git add -N failed" };
-  const diff = asAgent(["sh", "-c", `"$@" | head -c ${MAX_PATCH_BYTES + 1}`, "sh",
-    ...AGENT_GIT, "-C", workdir, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"]);
-  if (diff.status !== 0) return { error: "git diff failed" };
-  if (diff.stdout.length > MAX_PATCH_BYTES) return { base, error: `the change is over ${MAX_PATCH_BYTES} bytes` };
-  writeFileSync(join(outDir, "changes.patch"), diff.stdout);
-  writeFileSync(join(outDir, "base.json"), `${JSON.stringify({ repo: env.REPO, ref: env.BASE, commit: base })}\n`);
-  return { base, bytes: diff.stdout.length };
 }
 
 async function main() {
@@ -178,8 +177,9 @@ async function main() {
   const out = env.OUT;
   const runDir = join(out, "run");
   const tx = join(out, "transcript");
-  // agent-out: what a branch run hands back (bot-runs apply).
-  const outDir = join(out, "agent-out");
+  // safe-outputs: what the agent asked to have done (bot-runs apply).
+  const outDir = join(out, "safe-outputs");
+  const policy = JSON.parse(readFileSync(env.POLICY, "utf8"));
   const work = join(out, "work");
   for (const dir of [runDir, tx, work, outDir]) mkdirSync(dir, { recursive: true });
   const workdir = `${SANDBOX_HOME}/work/${env.REPO.split("/")[1]}`;
@@ -200,6 +200,7 @@ async function main() {
   const clone = asAgent(["git", "clone", "--quiet", "--depth", "50", "--branch", env.BASE, `https://github.com/${env.REPO}`, workdir]);
   if (clone.status !== 0) fail(`cloning ${env.REPO} failed`);
   console.log(`head: ${oneLine(asAgent(["git", "-C", workdir, "log", "-1", "--format=%h %s"]).stdout.toString().trim())}`);
+  const base = asAgent(["git", "-C", workdir, "rev-parse", "HEAD"]).stdout.toString().trim();
   console.log("::endgroup::");
 
   const started = new Date();
@@ -232,8 +233,8 @@ async function main() {
   }
 
   console.log("::group::Collect the run's files");
-  const { files, patch } = collect({ workdir, runDir, outDir });
-  if (patch?.error) console.log(`::warning::no change handed back: ${patch.error}`);
+  const { files, patch } = collect({ workdir, base, runDir, outDir, policy });
+  if (patch?.error) console.log(`::warning::no change handed back: ${oneLine(patch.error)}`);
   for (const f of [...HARNESS_FILES.map((name) => join(harnessOut, name)), join(work, "harness-stderr.log")]) {
     if (existsSync(f)) copyFileSync(f, join(tx, basename(f)));
   }

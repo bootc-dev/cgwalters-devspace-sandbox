@@ -16,6 +16,16 @@ run-name: "agent ${{ inputs.item }} ${{ inputs.repo }}"
 # the network only through an egress proxy (scripts/egress-proxy.mjs),
 # which leaves reads open and allows writes only to listed endpoints, and
 # the broker directly.
+#
+# What a run may hand back follows gh-aw's safe outputs
+# (https://github.github.com/gh-aw/reference/safe-outputs/): the agent's
+# requests (a pull request, a comment, noop, missing_tool) as JSONL, and
+# for a pull request a patch, uploaded as the safe-outputs artifact. The
+# restrictions are dispatch inputs (repo, base, outputs, max_outputs),
+# checked against safe-outputs/allowlist.json by the first job, before
+# anything else runs; the last job checks the artifact with gh-aw's own
+# validation code (vendor/gh-aw/), and bot-runs applies it. See
+# safe-outputs/safe-outputs.mjs.
 on:
   workflow_dispatch:
     inputs:
@@ -71,6 +81,15 @@ on:
         type: choice
         options: ["branch", "analysis"]
         default: branch
+      # Checked against safe-outputs/allowlist.json before anything runs.
+      outputs:
+        description: "Output types the run may hand back, comma separated (create_pull_request, add_comment, noop, missing_tool, missing_data)"
+        type: string
+        default: "create_pull_request,noop,missing_tool"
+      max_outputs:
+        description: "Most outputs the run may hand back, in all"
+        type: string
+        default: "3"
       brief:
         description: "The task text (public: no private data)"
         type: string
@@ -90,8 +109,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The restrictions are the dispatch inputs, checked against the static
+  # allowlist in the repository before a runner is spent on the agent. The
+  # policy they compile to (gh-aw's safe-outputs configuration) is what the
+  # agent step and the safe_outputs job use.
+  restrictions:
+    name: Restrictions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      policy: ${{ steps.policy.outputs.policy }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Check the restrictions against the allowlist
+        id: policy
+        shell: bash
+        env:
+          REPO: ${{ inputs.repo }}
+          BASE: ${{ inputs.base }}
+          WORKFLOW: ${{ inputs.workflow }}
+          OUTPUTS: ${{ inputs.outputs }}
+          MAX_OUTPUTS: ${{ inputs.max_outputs }}
+        run: |
+          set -euo pipefail
+          node safe-outputs/safe-outputs.mjs compile --repo "$REPO" --base "$BASE" --workflow "$WORKFLOW" \
+            --outputs "$OUTPUTS" --max-outputs "$MAX_OUTPUTS" --out "$RUNNER_TEMP/policy.json"
+          echo "policy=$(jq -c . "$RUNNER_TEMP/policy.json")" >> "$GITHUB_OUTPUT"
+
   agent:
     name: Agent
+    needs: restrictions
+    # Whether the run handed anything back, so that the last job can insist
+    # on checking it (upload-artifact sets artifact-id only for an upload).
+    outputs:
+      handed_back: ${{ steps.upload_outputs.outputs.artifact-id != '' }}
     runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
     timeout-minutes: 360
     env:
@@ -138,6 +196,13 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # From the restrictions job; only runner reads it.
+      - name: Write the safe-outputs policy
+        shell: bash
+        env:
+          POLICY_JSON: ${{ needs.restrictions.outputs.policy }}
+        run: printf '%s\n' "$POLICY_JSON" > "$RUNNER_TEMP/policy.json"
 
       - name: Install prerequisites
         shell: bash
@@ -374,6 +439,7 @@ jobs:
           WORKFLOW: ${{ inputs.workflow }}
           BRIEF: ${{ inputs.brief }}
           OUT: ${{ runner.temp }}/agent
+          POLICY: ${{ runner.temp }}/policy.json
           PRAXIS_DIR: ${{ runner.temp }}/praxis
         run: node agent/run.mjs
 
@@ -425,12 +491,57 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # A branch run's change (changes.patch, base.json), for bot-runs apply.
-      - name: Upload the change
-        if: ${{ !cancelled() && steps.uploads.outcome == 'success' && inputs.workflow == 'branch' }}
+      # What the agent asked to have done (outputs.jsonl, and for a pull
+      # request aw-BRANCH.patch and base.json), for the safe_outputs job and
+      # bot-runs apply. It isn't redacted (that would corrupt a patch), so
+      # check-uploads.mjs fails the run on a secret-shaped string in it.
+      - name: Upload the safe outputs
+        id: upload_outputs
+        if: ${{ !cancelled() && steps.uploads.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: agent-out
-          path: ${{ runner.temp }}/agent/agent-out/
+          name: safe-outputs
+          path: ${{ runner.temp }}/agent/safe-outputs/
           retention-days: 30
           if-no-files-found: ignore
+
+  # gh-aw's follow-up job: the agent job's artifact is checked with gh-aw's
+  # own validation code, on a fresh runner that never ran the agent, under
+  # the policy compiled from the dispatch inputs. Nothing is created here
+  # (no credentials): bot-runs apply does that from the verified artifact,
+  # and checks it again.
+  safe_outputs:
+    name: Safe outputs
+    needs: [restrictions, agent]
+    if: ${{ !cancelled() && needs.agent.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Download the safe outputs
+        if: ${{ needs.agent.outputs.handed_back == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: safe-outputs
+          path: ${{ runner.temp }}/safe-outputs
+      - name: Check the safe outputs
+        if: ${{ needs.agent.outputs.handed_back == 'true' }}
+        shell: bash
+        env:
+          POLICY_JSON: ${{ needs.restrictions.outputs.policy }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$POLICY_JSON" > "$RUNNER_TEMP/policy.json"
+          node safe-outputs/safe-outputs.mjs check --dir "$RUNNER_TEMP/safe-outputs" \
+            --policy "$RUNNER_TEMP/policy.json" --markdown "$GITHUB_STEP_SUMMARY"
+      - name: Nothing was handed back
+        if: ${{ needs.agent.outputs.handed_back != 'true' }}
+        shell: bash
+        run: echo 'The agent handed back no outputs and no change.' | tee -a "$GITHUB_STEP_SUMMARY"
