@@ -1,0 +1,42 @@
+{
+  "repo": "https://github.com/cgwalters-forge/gh-aw",
+  "commit": "c6be697158a13b49988bc18b15e6d3e691e7c062",
+  "source_dir": "actions/setup/js",
+  "entry_points": [
+    "collect_ndjson_output.cjs",
+    "manifest_file_helpers.cjs",
+    "patch_path_helpers.cjs",
+    "commit_sha_helpers.cjs"
+  ],
+  "generated": {
+    "validation.json": "GH_AW_VALIDATION_JSON of the compiled lock files",
+    "protected-files.json": "GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG of .github/workflows/archivx-agentic-workflows-analyzer.lock.yml"
+  },
+  "files": {
+    "collect_ndjson_output.cjs": "59266bcff9ce39fd24d2a8676bddfce1ca1080be2180c7921abe23562465ee36",
+    "commit_sha_helpers.cjs": "c30d2dd1345cf94ee8f338795d22c14b1a16ddf996f24b7910846f4d8748d332",
+    "constants.cjs": "825c65d865ec6dee547cac9fc5a0f2da95bdc5fe20bd006c811c2ddcb650d14f",
+    "data_schema_normalizer.cjs": "284163c587beee27cfd0107e578f710af5b38bf93d1ccee63deb0b3807247c70",
+    "error_codes.cjs": "3bd112bcc6b01de33c02834a7060ac2b010efeaf4a6cbca9328dafd1dd208ce6",
+    "error_helpers.cjs": "f5fa410e33e39ce17ce18efbd119f5cc849229f613c1e748138b4b5e673250c3",
+    "glob_pattern_helpers.cjs": "29ab420c14e1b646b6b4af14353322fabffe63b5caa95e1c0e599f7de03bebe4",
+    "intent_probe.cjs": "10eef7c05ff58b2a0709e34b9e7ac2bc744ff7543497fd264acd216cfec74450",
+    "json_repair_helpers.cjs": "fc6aa471b454c056ee0cd466ebcdac2d3455d63952102acefaf3707059684de1",
+    "manifest_file_helpers.cjs": "8e5f55a9cc4cc617f7167ae2e841a39f56b06913151d81ae11499093aa796a23",
+    "markdown_code_region_balancer.cjs": "8dd2a49a950b8ead4bca677ae5f020f9f07ecf55148bc71fd5d02f2c1979ecd6",
+    "markdown_unfencing.cjs": "536adabba240707d539f36a37b9ac85ea644cdab59c0a9650050568015ed4b7c",
+    "mcp_scripts_validation.cjs": "a9c9083f41045bccff0fe384b2db69df0590401f8d796172930a41b1e6bf1de6",
+    "patch_path_helpers.cjs": "b9bf2e58d0d404d63951e4785d2e707c6d282ebf5ad94bc45e1a8e64d1c7ba4b",
+    "repo_helpers.cjs": "26a891dca8a05b37c324fccff5d3d14a57e616d2aacae463c4516fcfecb24f9b",
+    "resolve_mentions.cjs": "7052f7855aa0afaedc99c0e0260a02622429d01c9e9ceb4caba0a3e16f2fc8b2",
+    "resolve_mentions_from_payload.cjs": "e4fd903cb9275827cde545393cb19f102645f530754cb82e4096b9ac9708cf63",
+    "safe_output_type_validator.cjs": "044c355391c1d7b8c29e33eadd13ed4339e6719ebcc51c955309671954d73e74",
+    "sanitize_content.cjs": "2102d3dc4b607233061c76a0bc4e4f116023a97fa8dff99113b84b3c489e7e18",
+    "sanitize_content_core.cjs": "de4290edbae54ef0e4426b71426d34f925c75d616ae95f5dc1b3f4b537de1bff",
+    "slash_command_matcher.cjs": "ff7fa0a2cbf6cb67041137613122923d7b187f5092235177ca9c216b9054eb53",
+    "templatable.cjs": "62db9e4d1aba29e9c3636cab47e8a3da756dc53e2c46b1b7d81e8a726fe52b35",
+    "temporary_id.cjs": "391ca2588243a85dc107eabf338e0a061027abb207f929dffb0f6663e1c9e837",
+    "validation.json": "2401142a0d247ece8f103836eca504567b5bb01ce26b4f9d2895773781eb1d74",
+    "protected-files.json": "97e87e3fb584389e1d8f6663d0996476a8cb427232251bf976f37708d34eb9c5"
+  }
+}
