@@ -153,6 +153,11 @@ jobs:
     runs-on: ${{ fromJSON('{"4":"rhel10-x86_64-4c-16g","16":"rhel10-x86_64-16c-64g","64":"rhel10-x86_64-64c-256g"}')[inputs.cores] }}
     timeout-minutes: 360
     env:
+      # The shellcheck the agent lints with: RHEL has none, so the release
+      # binary, checked against its sha256. Bump both by hand, which also
+      # renews the cache.
+      SHELLCHECK_VERSION: "0.10.0"
+      SHELLCHECK_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
       # The Rust the agent builds with, installed with rustup (the same
       # for every target; one with its own rust-toolchain.toml gets that
       # one, downloaded by rustup). Bump by hand, which also renews the cache.
@@ -208,7 +213,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo dnf install -y git curl zstd podman nodejs npm cargo python3 python3-pip
+          scripts/dnf-install.sh git curl zstd xz podman nodejs npm cargo python3 python3-pip
 
       - name: Install opencode
         if: ${{ inputs.agent == 'opencode' }}
@@ -226,7 +231,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo dnf install -y iptables
+          scripts/dnf-install.sh iptables
           sudo ln -sfn /usr/local/bin/tailscale /usr/bin/tailscale
           sudo ln -sfn /usr/local/bin/tailscaled /usr/bin/tailscaled
           # Cockpit listens on all addresses; nothing here uses it or sshd.
@@ -306,7 +311,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo dnf install -y --setopt=install_weak_deps=False \
+          scripts/dnf-install.sh --setopt=install_weak_deps=False \
             gcc gcc-c++ make cmake pkgconf-pkg-config perl-core \
             openssl-devel libzstd-devel clang clang-devel \
             ostree-devel glib2-devel libselinux-devel systemd-devel \
@@ -359,6 +364,42 @@ jobs:
             sudo ln -sfn /opt/cargo/bin/rustup "/usr/local/bin/$tool"
           done
           sudo chmod -R a+rX /opt/cargo
+
+      # The lint tools a target's CI runs and RHEL doesn't package (homegit:
+      # shellcheck). Cached like the toolchain, and saved before the agent
+      # runs.
+      - name: Restore the shellcheck cache
+        id: shellcheck-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: /opt/shellcheck
+          key: shellcheck-${{ runner.os }}-${{ runner.arch }}-${{ env.SHELLCHECK_VERSION }}
+
+      - name: Install shellcheck
+        if: ${{ steps.shellcheck-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/shellcheck
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C /opt/shellcheck --strip-components=1
+
+      - name: Save the shellcheck cache
+        if: ${{ steps.shellcheck-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: /opt/shellcheck
+          key: ${{ steps.shellcheck-cache.outputs.cache-primary-key }}
+
+      # Copied, so that runner-sandbox can't change what the PATH finds.
+      - name: Put shellcheck on the PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -m 0755 /opt/shellcheck/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version | grep -Fx "version: $SHELLCHECK_VERSION"
 
       # mitmproxy, with agent/egress/policy.toml, as its own user: reads are
       # open but for a threat feed, writes go only to listed endpoints, and
