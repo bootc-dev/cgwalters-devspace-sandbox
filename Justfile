@@ -36,5 +36,5 @@ init:
 # The harness's and the agent scripts' tests, and the egress policy's.
 test:
     cargo test --workspace --locked
-    node --test agent/*.test.mjs scripts/*.test.mjs
+    node --test agent/*.test.mjs scripts/*.test.mjs safe-outputs/*.test.mjs
     cd agent/egress && python3 -m unittest -v test_policy

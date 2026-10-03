@@ -1,0 +1,14 @@
+{
+  "repos": ["bootc-dev/*", "composefs/*", "ostreedev/*", "containers/*", "cgwalters-bot/*", "cgwalters-forge/*"],
+  "bases": ["main", "master", "bot/**"],
+  "outputs": {
+    "create_pull_request": { "max": 1 },
+    "add_comment": { "max": 3 },
+    "noop": { "max": 1 },
+    "missing_tool": { "max": 3 },
+    "missing_data": { "max": 3 }
+  },
+  "max_outputs": 5,
+  "max_patch_bytes": 8388608,
+  "max_patch_files": 100
+}
