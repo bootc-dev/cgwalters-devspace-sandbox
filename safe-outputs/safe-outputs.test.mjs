@@ -59,6 +59,29 @@ test("compilePolicy: the dispatch inputs against the allowlist", () => {
 });
 
 const POLICY = compilePolicy(INPUTS).policy;
+// The bot's own repository, where README.md and AGENTS.md may change.
+const OWN_REPO = "cgwalters-bot/homegit";
+const OWN_POLICY = compilePolicy({ ...INPUTS, repo: OWN_REPO }).policy;
+
+test("compilePolicy: docs are unprotected only in the bot's own repositories", () => {
+  const protectedIn = (repo) => compilePolicy({ ...INPUTS, repo }).policy.safe_outputs.create_pull_request;
+  const defaults = JSON.parse(readFileSync(join(VENDOR, "protected-files.json"), "utf8"));
+  for (const [repo, own] of [
+    [OWN_REPO, true],
+    ["CGWalters-Bot/Homegit", true],
+    ["cgwalters-forge/cgwalters-devspace-sandbox", true],
+    ["cgwalters-forge/review", true],
+    [REPO, false],
+    ["bootc-dev/cgwalters-devspace-sandbox", false],
+    ["cgwalters-bot/bootc", false],
+    ["cgwalters-forge/homegit", false],
+  ]) {
+    const config = protectedIn(repo);
+    assert.deepEqual(defaults.protected_files.filter((f) => !config.protected_files.includes(f)), own ? ["README.md", "AGENTS.md"] : [], repo);
+    assert.equal(config.protected_files_policy, "blocked", repo);
+    assert.equal(config.protect_top_level_dot_folders, true, repo);
+  }
+});
 
 // A hand-back directory: outputs.jsonl LINES, a base.json and the patch.
 function handback({ lines, patch, base, baseJson, extra = {} }) {
@@ -92,6 +115,29 @@ test("checkOutputs: what is accepted", async () => {
     assert.equal(verdict.ok, true, name);
     assert.deepEqual(verdict.items.map((i) => i.type), want.items, name);
     assert.equal(verdict.patch !== null, want.patch, name);
+  }
+});
+
+test("docs changes: accepted for the bot's own repository, refused upstream, in the patch and once applied", async () => {
+  const docs = { "README.md": "x\n", "AGENTS.md": "x\n", "docs/README.md": "x\n", "docs/design.md": "x\n" };
+  for (const [name, files, own, upstream] of [
+    ["README.md, AGENTS.md and docs/", docs, null, /protected files.*: (?=.*README\.md)(?=.*AGENTS\.md)/],
+    ["docs/ alone", { "docs/design.md": "x\n" }, null, null],
+    ["other protected docs", { "CONTRIBUTING.md": "x\n" }, /protected files.*CONTRIBUTING\.md/, /protected files.*CONTRIBUTING\.md/],
+    ["a manifest", { "package.json": "{}\n" }, /protected files.*package\.json/, /protected files.*package\.json/],
+    ["CI, beside a README", { "README.md": "x\n", ".github/workflows/x.yml": "on: push\n" }, /\.github/, /\.github/],
+    ["a secret in a README", { "README.md": `${"ghp_"}${"a1B2".repeat(10)}\n` }, /secret-shaped/, /secret-shaped/],
+  ]) {
+    const { patch, base } = patchOf(edit(files));
+    for (const [repo, policy, want] of [[OWN_REPO, OWN_POLICY, own], [REPO, POLICY, upstream]]) {
+      const where = `${name} in ${repo}`;
+      const verdict = await checkOutputs(handback({ lines: [PR], patch, base, baseJson: { repo, ref: BASE, commit: base } }), policy);
+      const applied = postApplyProblems(gitView(staged(edit(files))), policy);
+      for (const errors of [verdict.errors, applied]) {
+        if (want) assert.match(errors.join("\n"), want, where);
+        else assert.deepEqual(errors, [], where);
+      }
+    }
   }
 });
 

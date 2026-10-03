@@ -14,7 +14,8 @@
 //     generated validation rules (vendor/gh-aw/validation.json);
 //   - manifest_file_helpers.cjs: checkFileProtection and
 //     checkFileProtectionPostApply, create_pull_request's protected-files
-//     policy, with the compiler's default lists (vendor/gh-aw/protected-files.json);
+//     policy, with the compiler's default lists (vendor/gh-aw/protected-files.json),
+//     less README.md and AGENTS.md for the bot's own repositories (allowlist.json);
 //   - patch_path_helpers.cjs and commit_sha_helpers.cjs: reading a patch's
 //     paths and its X-GH-AW-Base-Commit header;
 //   - glob_pattern_helpers.cjs: the glob syntax of the allowlist.
@@ -85,6 +86,20 @@ function globMatches(patterns, value) {
   return patterns.some((p) => globPatternToRegex(p.toLowerCase()).test(value.toLowerCase()));
 }
 
+// gh-aw's default protected-files lists (vendor/gh-aw/protected-files.json),
+// which is what a run for an upstream repository gets. For the bot's own
+// repositories, named exactly in the allowlist's unprotected_files, the docs
+// listed there (README.md, AGENTS.md) come off the list, at any depth as
+// gh-aw matches them: editing them is routine work there. Only names leave
+// the list, so manifests, CODEOWNERS, top-level dot-folders (.github/) and
+// everything PROTECTED_PATH_RE names stay protected everywhere.
+function protectedFiles(repo, allowlist) {
+  const defaults = readJson(join(VENDOR, "protected-files.json"));
+  const { repos = [], files = [] } = allowlist.unprotected_files ?? {};
+  if (!repos.some((r) => r.toLowerCase() === repo.toLowerCase())) return defaults;
+  return { ...defaults, protected_files: defaults.protected_files.filter((f) => !files.includes(f)) };
+}
+
 // The policy of a run: its dispatch inputs checked against the static
 // allowlist, and the gh-aw safe-outputs configuration (config.json) they
 // compile to. Returns {errors} (all of them) or {policy}.
@@ -120,7 +135,7 @@ export function compilePolicy({ repo, base, workflow, outputs, maxOutputs }, all
   const safeOutputs = Object.fromEntries(types.map((t) => [t, { max: Math.min(allowlist.outputs[t].max, max) }]));
   if (types.includes("create_pull_request")) {
     safeOutputs.create_pull_request = {
-      ...safeOutputs.create_pull_request, ...readJson(join(VENDOR, "protected-files.json")),
+      ...safeOutputs.create_pull_request, ...protectedFiles(repo, allowlist),
       draft: true, max_patch_size: allowlist.max_patch_bytes / KB, max_patch_files: allowlist.max_patch_files,
     };
   }

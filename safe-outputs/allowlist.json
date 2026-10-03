@@ -8,6 +8,10 @@
     "missing_tool": { "max": 3 },
     "missing_data": { "max": 3 }
   },
+  "unprotected_files": {
+    "repos": ["cgwalters-bot/homegit", "cgwalters-forge/cgwalters-devspace-sandbox", "cgwalters-forge/review"],
+    "files": ["README.md", "AGENTS.md"]
+  },
   "max_outputs": 5,
   "max_patch_bytes": 8388608,
   "max_patch_files": 100
