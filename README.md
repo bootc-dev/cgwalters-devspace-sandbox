@@ -303,7 +303,11 @@ test fails if a file drifts):
   `checkFileProtectionPostApply`), `patch_path_helpers.cjs` and
   `commit_sha_helpers.cjs`: the protected-files policy (`blocked`: README.md,
   AGENTS.md, manifests, CODEOWNERS and top-level dot-folders such as `.github/`
-  can't be changed), and reading a patch's paths and base commit.
+  can't be changed), and reading a patch's paths and base commit. In the
+  bot's own repositories (`unprotected_files` in the allowlist, by exact
+  name) README.md and AGENTS.md may change, since docs edits are routine
+  there; everything else stays protected, and upstream repositories keep
+  gh-aw's default.
 
 Not in gh-aw, so here: secret-shaped strings in a patch, symlinks,
 submodules, binaries, mode changes and new executables, plain relative
