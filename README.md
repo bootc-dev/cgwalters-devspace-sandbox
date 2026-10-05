@@ -210,9 +210,12 @@ input (default `cgwalters-bot/homegit` at `homegit_ref`, `main`), the
 configuration the bot's local opencode uses too, model included (the
 `model` input still overrides it). `agent/praxis.mjs configure` refuses a
 configuration that enables any provider but the broker, and gives
-`runner-sandbox` only `opencode.json` and `AGENTS.md` from its
-`dotfiles/.config/opencode` (opencode would run any plugin or command
-found there), with the
+`runner-sandbox` only `opencode.json`, `AGENTS.md` and, when the checkout
+has it, `opencode-runner.json` from its `dotfiles/.config/opencode`
+(opencode would run any plugin or command found there). That last one is
+the runner's profile, in which the primary agent implements directly
+instead of delegating to a plan, implement and review chain; it is refused
+if it sets providers. `opencode.json` is written with the
 broker's base URL (`PRAXIS_BASE_URL`), sharing off and the run token as
 the key set whatever the file says. The run token stays in a directory only
 `runner` can read and is masked in the log; its opencode `opencode.json`
@@ -220,8 +223,10 @@ the key set whatever the file says. The run token stays in a directory only
 proves it's nowhere else the agent can read. The broker's per-run cap and
 lifetime then bound what the agent spends, and nodes with the runners' tag
 but no registered run get nothing.
-`harness/agents.toml` keeps opencode from loading the target repository's
-own configuration (which could bring other providers or plugins back).
+`harness/agents.toml` starts opencode through `agent/opencode-launch.mjs`,
+which the workflow installs in `/usr/local/bin`. It selects that profile and
+keeps opencode from loading the target repository's own configuration
+(which could bring other providers or plugins back).
 
 For these runs the job joins the tailnet as devspaces do, after the same
 hardening (sshd stopped, Cockpit off), but without MagicDNS

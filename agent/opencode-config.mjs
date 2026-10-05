@@ -12,6 +12,7 @@ import { asSandbox } from "../scripts/runner-sandbox.mjs";
 
 export const OPENCODE_SRC_DIR = "dotfiles/.config/opencode";
 export const OPENCODE_CONFIG_FILE = "opencode.json";
+export const OPENCODE_RUNNER_FILE = "opencode-runner.json";
 // Where opencode reads its global configuration, in runner-sandbox's home.
 export const OPENCODE_CONFIG_DIR = ".config/opencode";
 export const PRAXIS_PROVIDER = "praxis";
@@ -19,7 +20,14 @@ export const PRAXIS_PROVIDER = "praxis";
 // (opencode.jsonc, config.json) and runs plugins, tools and commands found
 // in its configuration directory, none of which the provider check below
 // covers. The rest of the directory is left behind.
-export const COPIED_FILES = [OPENCODE_CONFIG_FILE, "AGENTS.md"];
+export const COPIED_FILES = [OPENCODE_CONFIG_FILE, "AGENTS.md", OPENCODE_RUNNER_FILE];
+
+// Remove the previous optional profile before unpacking: an older homegit
+// checkout may omit it. Also remove a stale symlink rather than writing through it.
+export const CONFIG_INSTALL_COMMAND =
+  `umask 077 && mkdir -p "$HOME/${OPENCODE_CONFIG_DIR}" && chmod 0700 "$HOME/${OPENCODE_CONFIG_DIR}" `
+  + `&& rm -f "$HOME/${OPENCODE_CONFIG_DIR}/${OPENCODE_RUNNER_FILE}" `
+  + `&& tar -xf - -C "$HOME/${OPENCODE_CONFIG_DIR}" && chmod 0600 "$HOME/${OPENCODE_CONFIG_DIR}/${OPENCODE_CONFIG_FILE}"`;
 
 // text with the comments and trailing commas of JSONC removed, ready for
 // JSON.parse. String-aware, so a "//" in a URL stays.
@@ -72,6 +80,23 @@ export function parseOpencodeConfig(text) {
   return config;
 }
 
+// Keys of opencode's configuration that choose where inference goes.
+const PROVIDER_KEYS = ["provider", "enabled_providers", "disabled_providers"];
+
+// Checks homegit's optional runner profile. opencode merges it over
+// opencode.json, so it must leave the providers checked above alone.
+export function checkRunnerProfile(text) {
+  let profile;
+  try {
+    profile = JSON.parse(stripJsonc(text));
+  } catch (e) {
+    throw new Error(`homegit's ${OPENCODE_RUNNER_FILE} isn't valid JSONC: ${e.message}`);
+  }
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) throw new Error(`homegit's ${OPENCODE_RUNNER_FILE} must be a JSON object`);
+  const set = PROVIDER_KEYS.filter((key) => key in profile);
+  if (set.length > 0) throw new Error(`homegit's ${OPENCODE_RUNNER_FILE} must not set ${set.join(", ")}: providers come only from ${OPENCODE_CONFIG_FILE}`);
+}
+
 // The configuration the run uses: homegit's, with the broker's base URL,
 // the key (the run token) and sharing off.
 export function runConfig(config, { baseURL, apiKey }) {
@@ -108,6 +133,7 @@ export function installOpencodeConfig(homegitDir, { baseURL, apiKey }) {
   if (!existsSync(join(dir, OPENCODE_CONFIG_FILE))) throw new Error(`${OPENCODE_SRC_DIR}/${OPENCODE_CONFIG_FILE} is missing from ${homegitDir}`);
   const config = runConfig(parseOpencodeConfig(readFileSync(join(dir, OPENCODE_CONFIG_FILE), "utf8")), { baseURL, apiKey });
   const files = configFiles(dir, root);
+  if (files.includes(OPENCODE_RUNNER_FILE)) checkRunnerProfile(readFileSync(join(dir, OPENCODE_RUNNER_FILE), "utf8"));
   const stage = mkdtempSync(join(tmpdir(), "opencode-config-"));
   try {
     for (const f of files) {
@@ -119,10 +145,7 @@ export function installOpencodeConfig(homegitDir, { baseURL, apiKey }) {
     if (tar.status !== 0) throw new Error("packing homegit's opencode configuration failed");
     // The archive goes over stdin, never onto a command line; umask 077 from
     // the start so the run token is never readable by others.
-    const write = asSandbox(["sh", "-c",
-      `umask 077 && mkdir -p "$HOME/${OPENCODE_CONFIG_DIR}" && chmod 0700 "$HOME/${OPENCODE_CONFIG_DIR}" `
-      + `&& tar -xf - -C "$HOME/${OPENCODE_CONFIG_DIR}" && chmod 0600 "$HOME/${OPENCODE_CONFIG_DIR}/${OPENCODE_CONFIG_FILE}"`],
-    { input: tar.stdout });
+    const write = asSandbox(["sh", "-c", CONFIG_INSTALL_COMMAND], { input: tar.stdout });
     if (write.status !== 0) throw new Error("writing runner-sandbox's opencode configuration failed");
   } finally {
     rmSync(stage, { recursive: true, force: true });

@@ -168,6 +168,21 @@ command = ["opencode", "acp"]
     }
 
     #[test]
+    fn installed_opencode_launcher() {
+        let spec = parse(include_str!("../agents.toml"), "opencode").unwrap();
+        for wrapper in [vec![], strings(&["sudo", "run0", "--"])] {
+            let (argv, env) = spec.command(&wrapper, Some("praxis/m"));
+            let mut expected = wrapper.clone();
+            if !wrapper.is_empty() {
+                expected.push("env".to_owned());
+            }
+            expected.extend(strings(&["node", "/usr/local/bin/opencode-launch.mjs"]));
+            assert_eq!(argv, expected);
+            assert!(env.is_empty());
+        }
+    }
+
+    #[test]
     fn bad_registries() {
         let cases = [
             (

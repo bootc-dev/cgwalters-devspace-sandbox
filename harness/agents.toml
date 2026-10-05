@@ -24,8 +24,10 @@ env = { DISABLE_AUTOUPDATER = "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1
 # OPENCODE_DISABLE_EXTERNAL_SKILLS would drop the project's own guidance
 # without adding a boundary.
 [opencode]
-command = ["opencode", "acp"]
-env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1", OPENCODE_DISABLE_MODELS_FETCH = "1" }
+# The launcher clears inherited OPENCODE_* and XDG base directories before
+# restoring the deliberate disable controls and selecting the optional
+# installed profile. agent.yml installs it.
+command = ["node", "/usr/local/bin/opencode-launch.mjs"]
 
 # A scripted agent with no model behind it (src/bin/fake-acp-agent.rs),
 # for runs without inference: it plays fake-agent-demo.json.
