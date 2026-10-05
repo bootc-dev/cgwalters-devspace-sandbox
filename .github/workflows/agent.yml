@@ -222,6 +222,8 @@ jobs:
           set -euo pipefail
           grep -E '^opencode-ai@' npm.txt | xargs sudo npm install -g --no-audit --no-fund
           opencode --version
+          # What agents.toml runs as runner-sandbox, which can't read this checkout.
+          sudo install -m 0644 agent/opencode-launch.mjs /usr/local/bin/opencode-launch.mjs
 
       # As in devspace.yml: nothing may listen on the tailnet once the
       # runner joins it, and the action installs into /usr/local/bin, which

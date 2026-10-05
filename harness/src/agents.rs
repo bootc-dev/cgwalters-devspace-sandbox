@@ -182,6 +182,16 @@ command = ["opencode", "acp"]
         }
     }
 
+    /// runner-sandbox can't read the checkout, so agent.yml has to install
+    /// the launcher where the registry looks for it.
+    #[test]
+    fn workflow_installs_opencode_launcher() {
+        let spec = parse(include_str!("../agents.toml"), "opencode").unwrap();
+        let launcher = spec.command.last().unwrap();
+        let install = format!("sudo install -m 0644 agent/opencode-launch.mjs {launcher}\n");
+        assert!(include_str!("../../.github/workflows/agent.yml").contains(&install));
+    }
+
     #[test]
     fn bad_registries() {
         let cases = [
