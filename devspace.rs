@@ -1017,10 +1017,8 @@ mod tests {
         let workflow: serde_yaml::Value =
             serde_yaml::from_str(&fs::read_to_string(".github/workflows/agent.yml").unwrap())
                 .unwrap();
-        let expression = find_yaml_key(&workflow, "runs-on")
-            .unwrap()
-            .as_str()
-            .unwrap();
+        // The agent job's: other jobs run on fixed GitHub-hosted runners.
+        let expression = workflow["jobs"]["agent"]["runs-on"].as_str().unwrap();
         let mapping = expression
             .split("fromJSON('")
             .nth(1)
