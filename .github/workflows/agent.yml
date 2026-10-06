@@ -7,9 +7,10 @@ run-name: "agent ${{ inputs.item }} ${{ inputs.repo }}"
 # The inputs, artifacts and summary.json follow docs/devspace-agent-runs.md
 # in cgwalters-bot/homegit; bot-runs there dispatches and reads these runs.
 # The agents are the scripted fake one (harness/src/bin/fake-acp-agent.rs),
-# which needs no inference, and opencode, which gets it from the praxis
-# credential broker on the tailnet (vars.PRAXIS_BASE_URL). The broker holds
-# the subscription login, so no model credential reaches this runner. The
+# which needs no inference, and opencode and claude (Claude Code), which get
+# it from the praxis credential broker on the tailnet
+# (vars.PRAXIS_BASE_URL). The broker holds the subscription logins, one per
+# provider, so no model credential reaches this runner. The
 # job's only credentials are its OIDC tokens, for the tailnet login and to
 # register a praxis run (agent/praxis.mjs), which caps and counts the
 # agent's tokens; the agent gets only that run's token. The agent reaches
@@ -41,15 +42,14 @@ on:
         description: "Base ref of the target repository"
         type: string
         default: main
-      # An entry in harness/agents.toml. claude joins once the broker
-      # can hold its credential too.
+      # An entry in harness/agents.toml.
       agent:
         description: "Agent"
         type: choice
-        options: ["fake", "opencode"]
+        options: ["fake", "opencode", "claude"]
         default: fake
       model:
-        description: "Model, as provider/model (empty: the agent's default; for opencode, the one in homegit's configuration)"
+        description: "Model (empty: the agent's default; for opencode provider/model, by default the one in homegit's configuration; for claude a model name or alias, by default opus)"
         type: string
         default: ""
       # opencode's configuration (providers, model, instructions) is the
@@ -245,6 +245,19 @@ jobs:
           opencode --version
           # What agents.toml runs as runner-sandbox, which can't read this checkout.
           sudo install -m 0644 agent/opencode-launch.mjs /usr/local/bin/opencode-launch.mjs
+
+      # The ACP adapter brings the Claude Code it was built for (its SDK's
+      # own binary), so its pin in npm.txt is the pin of both; the claude
+      # pinned there is the devspaces' interactive one.
+      - name: Install Claude Code
+        if: ${{ inputs.agent == 'claude' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -E '^@agentclientprotocol/claude-agent-acp@' npm.txt | xargs sudo npm install -g --no-audit --no-fund
+          command -v claude-agent-acp
+          # What agents.toml runs as runner-sandbox, which can't read this checkout.
+          sudo install -m 0644 agent/claude-launch.mjs /usr/local/bin/claude-launch.mjs
 
       # As in devspace.yml: nothing may listen on the tailnet once the
       # runner joins it, and the action installs into /usr/local/bin, which
@@ -454,12 +467,14 @@ jobs:
           PRAXIS_DIR: ${{ runner.temp }}/praxis
         run: node agent/praxis.mjs register "$PRAXIS_DIR"
 
-      # The run token, as the key in runner-sandbox's opencode configuration
-      # (0600): the only way it reaches the agent.
+      # The run token, in one file of runner-sandbox's (0600): the key in
+      # its opencode configuration, or the environment claude-launch.mjs
+      # gives Claude Code. The only way it reaches the agent.
       - name: Configure the agent's inference
-        if: ${{ inputs.agent == 'opencode' }}
+        if: ${{ inputs.agent != 'fake' }}
         shell: bash
         env:
+          AGENT: ${{ inputs.agent }}
           PRAXIS_DIR: ${{ runner.temp }}/praxis
           HOMEGIT_DIR: ${{ github.workspace }}/homegit
         run: node agent/praxis.mjs configure "$PRAXIS_DIR"
@@ -483,7 +498,7 @@ jobs:
           # predates run tokens.
           token_args=()
           if [[ "$AGENT" != fake && ! -e "$PRAXIS_DIR/legacy-broker" ]]; then
-            token_args=(--run-token-file "$PRAXIS_DIR/run-token")
+            token_args=(--run-token-file "$PRAXIS_DIR/run-token" --agent "$AGENT")
           fi
           node scripts/agent-isolation-check.mjs --egress-proxy ${PRAXIS_BASE_URL:+--tailnet-allow "$PRAXIS_BASE_URL"} "${token_args[@]}" https://github.com/
 

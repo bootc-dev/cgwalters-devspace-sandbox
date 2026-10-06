@@ -11,15 +11,16 @@
 // network is otherwise open.
 // It gets none of the variables that mint the job's OIDC tokens. With
 // --run-token-file (agent/praxis.mjs), the praxis run token reaches it only
-// in its opencode configuration, which only it can read.
+// in the configuration of its agent (--agent), which only it can read.
 // Exits nonzero if any check fails.
-//   agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] [--egress-proxy] CONTROL_URL
+//   agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE --agent AGENT] [--egress-proxy] CONTROL_URL
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { parseArgs } from "node:util";
-import { OIDC_REQUEST_VARS, OPENCODE_CONFIG_DIR } from "../agent/praxis.mjs";
+import { OIDC_REQUEST_VARS, TOKEN_CONFIG } from "../agent/praxis.mjs";
 import { asAgent } from "./agent-lib.mjs";
 import { CA_CERT, PROXY_URL } from "./egress-proxy.mjs";
 import { SANDBOX_HOME, SANDBOX_USER, fail } from "./runner-sandbox.mjs";
@@ -53,19 +54,23 @@ const OTHER_TAILNET_PORT = 22;
 
 const { values, positionals } = parseArgs({
   options: {
-    "tailnet-allow": { type: "string" }, "run-token-file": { type: "string" },
+    "tailnet-allow": { type: "string" }, "run-token-file": { type: "string" }, agent: { type: "string" },
     "egress-proxy": { type: "boolean", default: false },
   },
   allowPositionals: true,
 });
 const [control] = positionals;
 if (!control || positionals.length > 1) {
-  fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE] [--egress-proxy] CONTROL_URL");
+  fail("usage: agent-isolation-check.mjs [--tailnet-allow URL] [--run-token-file FILE --agent AGENT] [--egress-proxy] CONTROL_URL");
 }
 const egress = values["egress-proxy"];
 const tailnetAllow = values["tailnet-allow"];
 const runTokenFile = values["run-token-file"];
-const OPENCODE_CONFIG = `${SANDBOX_HOME}/${OPENCODE_CONFIG_DIR}/opencode.json`;
+// The agent's one file that holds the run token.
+if (runTokenFile && !Object.hasOwn(TOKEN_CONFIG, values.agent ?? "")) {
+  fail(`--run-token-file needs --agent, one of ${Object.keys(TOKEN_CONFIG).join(", ")}`);
+}
+const TOKEN_CONFIG_FILE = runTokenFile ? `${SANDBOX_HOME}/${TOKEN_CONFIG[values.agent]}` : null;
 // Where runner-sandbox can write, and so where a token handed to it could
 // have been left: its home, the shared temporary directories, and its
 // runtime directory.
@@ -176,7 +181,7 @@ for (const name of OIDC_REQUEST_VARS) {
 }
 
 // The run token: runner's file is out of reach; runner-sandbox's copy is
-// its opencode configuration, 0600 in a 0700 directory, and nowhere else it
+// its agent's configuration, 0600 in a 0700 directory, and nowhere else it
 // can write or read a process's environment or command line. The token
 // goes to the searches on stdin, never on a command line.
 if (runTokenFile) {
@@ -189,25 +194,25 @@ if (runTokenFile) {
   expect("succeed", `runner reads the run token (control)`, /^praxis-run-[0-9a-f]{64}$/.test(token));
   expect("fail", `${SANDBOX_USER} can't read ${runTokenFile}`, succeeds(["cat", runTokenFile]));
   const holds = (path) => asAgent(["grep", "-qsF", "-f", "-", "--", path], { input: `${token}\n` }).status === 0;
-  expect("succeed", `${SANDBOX_USER}'s ${OPENCODE_CONFIG} holds the run token (control)`, holds(OPENCODE_CONFIG));
+  expect("succeed", `${SANDBOX_USER}'s ${TOKEN_CONFIG_FILE} holds the run token (control)`, holds(TOKEN_CONFIG_FILE));
   const mode = (path) => {
     const r = spawnSync("sudo", ["stat", "-c", "%U %a", path], { encoding: "utf8" });
     return r.status === 0 ? r.stdout.trim() : null;
   };
-  const configDir = OPENCODE_CONFIG.replace(/\/[^/]*$/, "");
-  expect("succeed", `${OPENCODE_CONFIG} is ${SANDBOX_USER}'s, mode 600`, mode(OPENCODE_CONFIG) === `${SANDBOX_USER} 600`);
+  const configDir = TOKEN_CONFIG_FILE.replace(/\/[^/]*$/, "");
+  expect("succeed", `${TOKEN_CONFIG_FILE} is ${SANDBOX_USER}'s, mode 600`, mode(TOKEN_CONFIG_FILE) === `${SANDBOX_USER} 600`);
   expect("succeed", `its directory is ${SANDBOX_USER}'s, mode 700`, mode(configDir) === `${SANDBOX_USER} 700`);
   const found = asAgent(["grep", "-rlsF", "-f", "-", "--", ...WRITABLE], { input: `${token}\n` })
     .stdout.toString().split("\n").filter(Boolean);
   expect("succeed", `${SANDBOX_USER} finds the token in no other file it can reach (${found.join(", ") || "only the configuration"})`,
-    found.includes(OPENCODE_CONFIG) && found.every((f) => f === OPENCODE_CONFIG));
+    found.includes(TOKEN_CONFIG_FILE) && found.every((f) => f === TOKEN_CONFIG_FILE));
   const cmdlines = asAgent(["sh", "-c", "cat /proc/[0-9]*/cmdline 2>/dev/null; true"]).stdout.toString("latin1");
   expect("fail", `no process ${SANDBOX_USER} can read has the token in its environment or command line`,
     environs.includes(token) || cmdlines.includes(token));
   // Containers run rootless as runner-sandbox, whose own uid is their
   // root; any other uid in them is a subordinate one.
   const readInContainer = (uid) => succeeds(["podman", "run", "--rm", "--security-opt", "label=disable", "--user", uid,
-    "-v", `${configDir}:/config:ro`, CONTAINER_IMAGE, "cat", "/config/opencode.json"]);
+    "-v", `${configDir}:/config:ro`, CONTAINER_IMAGE, "cat", `/config/${basename(TOKEN_CONFIG_FILE)}`]);
   expect("succeed", "a container as its root (runner-sandbox) reads the configuration (control)", readInContainer("0"));
   expect("fail", `a container as subordinate uid ${CONTAINER_UID} can't read the configuration`, readInContainer(CONTAINER_UID));
 }

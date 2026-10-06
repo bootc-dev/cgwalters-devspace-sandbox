@@ -207,7 +207,7 @@ follow the
 [agent runs contract](https://github.com/cgwalters-bot/homegit/blob/main/docs/devspace-agent-runs.md),
 and homegit's `bot-runs` dispatches and reads the runs.
 
-A run offers two agents. `fake` needs no inference: it plays
+A run offers three agents. `fake` needs no inference: it plays
 `harness/fake-agent-demo.json`, using the tools, running into the sandbox
 (sudo, the metadata service) and the policy (`git push`), and printing a
 token-shaped string for the redaction pass to catch.
@@ -247,6 +247,40 @@ which the workflow installs in `/usr/local/bin`. It selects that profile and
 keeps opencode from loading the target repository's own configuration
 (which could bring other providers or plugins back).
 
+`claude` is Claude Code, through its ACP adapter, on the same broker: its
+Anthropic Messages routes, beside the Responses ones
+(`<PRAXIS_BASE_URL without /v1>/anthropic`). There the broker adds its own
+Claude credential, a token of the operator's subscription kept as a secret
+on the broker's host, to the requests of a registered run and of nobody
+else
+([credential modes](https://github.com/cgwalters-bot/praxis-credential-broker/blob/main/INTERNALS.md)):
+the request carries the broker's placeholder as its credential and the run
+token in an `x-run-token` header. `agent/praxis.mjs configure` writes that
+environment to `~/.config/claude-runner/run.json` (mode 0600), the only
+place the agent gets the run token, which `agent/claude-launch.mjs` gives
+the adapter after clearing every inherited `ANTHROPIC_*` and `CLAUDE_*`
+variable but the model; without the file it refuses to start, so Claude
+Code never looks for a login of its own. None of its configuration comes
+from homegit. Claude Code also reads the target repository's
+`.claude/settings.json`, whose `env` it applies over its own environment,
+so root's `/etc/claude-code/managed-settings.json`, which it puts above
+that, pins the endpoint and the switches to other providers, and limits
+hooks and permission rules to managed ones (there are none): every
+command and edit stays a permission request that `bot-harness` answers and
+records.
+That keeps a checkout from redirecting or reconfiguring the run by being
+opened, but it is not the boundary: the agent can read the run token and
+run any command, and what contains it is the sandbox user and the egress
+proxy, as for opencode. The repository's `CLAUDE.md` and skills still
+load, as text for the model. The runner's profile is
+`agent/claude-runner.md`, installed as `~/.claude/CLAUDE.md`: implement
+directly, no plan, implement and review chain. The model is Opus unless the
+`model` input names another (a Claude Code model name or alias). Only the
+adapter is installed, from its pin in `npm.txt`: it brings the Claude Code
+it was built for. Claude Code reports what its tokens would cost at API
+rates, so for it the `budget` input does apply, to that estimate
+(`aic_pricing: api-equivalent`), next to the broker's caps.
+
 For these runs the job joins the tailnet as devspaces do, after the same
 hardening (sshd stopped, Cockpit off), but without MagicDNS
 (`--accept-dns=false`), which would name every node. The tailnet ACL for the
@@ -255,7 +289,7 @@ allows more. Underneath it, as defence in depth, `setup-runner-sandbox.mjs
 --tailnet-allow` rejects everything `runner-sandbox`'s uids send out of the
 Tailscale interface or to a tailnet address (quad-100 and the runner's own
 included), except to the broker's address and port, and tailscaled's
-LocalAPI is closed to it. There is no per-token
+LocalAPI is closed to it. For opencode there is no per-token
 cost, so the `budget` input doesn't apply (`aic_pricing: subscription`):
 the broker's per-run cap bounds the run's tokens, and its policy's
 `max_secs` and the timeout its time. (`budget` isn't turned into a token

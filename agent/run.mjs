@@ -54,11 +54,12 @@ const CAPS = { MAX_REQUESTS: "--max-requests", MAX_TASKS: "--max-tasks" };
 // broker on the tailnet (PRAXIS_BASE_URL), which holds the subscription
 // login: nothing on this runner has a model credential, and the agent has
 // only the token of this job's praxis run, which caps and counts its use.
-const INFERENCE_AGENTS = ["opencode"];
+const INFERENCE_AGENTS = ["opencode", "claude"];
 const AGENTS = ["fake", ...INFERENCE_AGENTS];
-// The repository's instructions for agents. opencode doesn't load them
-// itself here (OPENCODE_DISABLE_PROJECT_CONFIG, harness/agents.toml).
-const INSTRUCTION_FILES = { opencode: ["AGENTS.md", "CLAUDE.md"] };
+// The repository's instructions for agents that the agent doesn't load
+// itself: opencode none here (OPENCODE_DISABLE_PROJECT_CONFIG,
+// harness/agents.toml), Claude Code only CLAUDE.md.
+const INSTRUCTION_FILES = { opencode: ["AGENTS.md", "CLAUDE.md"], claude: ["AGENTS.md"] };
 // Time bot-harness gets past the agent's timeout to cancel it and finish.
 const HARNESS_GRACE_S = 90;
 const LOG_GROUP = "agent (condensed)";
@@ -76,8 +77,9 @@ const EXIT_TIMEOUT = 124;
 const ACCESS_LOG = "access.log";
 // How a run's AIC is priced: the fake agent reports a made-up cost, and
 // subscription inference through the broker has none per token (the
-// broker caps and counts the run's tokens instead).
-const AIC_PRICING = { fake: "mock", opencode: "subscription" };
+// broker caps and counts the run's tokens instead). Claude Code still
+// reports what its tokens would cost at API rates, which the budget caps.
+const AIC_PRICING = { fake: "mock", opencode: "subscription", claude: "api-equivalent" };
 // The values of whatever tokens this step can see, for redaction.
 const TOKEN_VARS = ["ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_TOKEN"];
 const REQUIRED = ["ITEM", "REPO", "BASE", "AGENT", "CORES", "TIMEOUT_MINUTES", "BUDGET", "WORKFLOW", "BRIEF", "OUT", "POLICY",

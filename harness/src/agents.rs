@@ -168,28 +168,43 @@ command = ["opencode", "acp"]
     }
 
     #[test]
-    fn installed_opencode_launcher() {
-        let spec = parse(include_str!("../agents.toml"), "opencode").unwrap();
-        for wrapper in [vec![], strings(&["sudo", "run0", "--"])] {
-            let (argv, env) = spec.command(&wrapper, Some("praxis/m"));
+    fn installed_launchers() {
+        // (agent, the model the run names, what the wrapped command gets)
+        let cases: [(&str, Option<&str>, &[&str]); 3] = [
+            ("opencode", Some("praxis/m"), &[]),
+            ("claude", None, &["ANTHROPIC_MODEL=opus"]),
+            ("claude", Some("sonnet"), &["ANTHROPIC_MODEL=sonnet"]),
+        ];
+        for (agent, model, vars) in cases {
+            let spec = parse(include_str!("../agents.toml"), agent).unwrap();
+            let launcher = strings(&["node", &format!("/usr/local/bin/{agent}-launch.mjs")]);
+            let (argv, env) = spec.command(&[], model);
+            assert_eq!(argv, launcher, "{agent}");
+            assert_eq!(env.len(), vars.len(), "{agent}");
+            let wrapper = strings(&["sudo", "run0", "--"]);
+            let (argv, env) = spec.command(&wrapper, model);
             let mut expected = wrapper.clone();
-            if !wrapper.is_empty() {
-                expected.push("env".to_owned());
-            }
-            expected.extend(strings(&["node", "/usr/local/bin/opencode-launch.mjs"]));
-            assert_eq!(argv, expected);
-            assert!(env.is_empty());
+            expected.push("env".to_owned());
+            expected.extend(strings(vars));
+            expected.extend(launcher);
+            assert_eq!(argv, expected, "{agent}");
+            assert!(env.is_empty(), "{agent}");
         }
     }
 
     /// runner-sandbox can't read the checkout, so agent.yml has to install
-    /// the launcher where the registry looks for it.
+    /// each launcher where the registry looks for it.
     #[test]
-    fn workflow_installs_opencode_launcher() {
-        let spec = parse(include_str!("../agents.toml"), "opencode").unwrap();
-        let launcher = spec.command.last().unwrap();
-        let install = format!("sudo install -m 0644 agent/opencode-launch.mjs {launcher}\n");
-        assert!(include_str!("../../.github/workflows/agent.yml").contains(&install));
+    fn workflow_installs_launchers() {
+        for agent in ["opencode", "claude"] {
+            let spec = parse(include_str!("../agents.toml"), agent).unwrap();
+            let launcher = spec.command.last().unwrap();
+            let install = format!("sudo install -m 0644 agent/{agent}-launch.mjs {launcher}\n");
+            assert!(
+                include_str!("../../.github/workflows/agent.yml").contains(&install),
+                "{agent}"
+            );
+        }
     }
 
     #[test]

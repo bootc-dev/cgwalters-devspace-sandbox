@@ -1,11 +1,13 @@
 // Tests for agent/praxis.mjs register, against a fake GitHub OIDC endpoint
 // and praxis runs endpoint. Run with: node --test agent/*.test.mjs (just test)
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { AUDIENCE, LEGACY_FILE, RECORD_SCHEMA, TOKEN_FILE, USAGE_FILE, countRequests, finish, modelRequests, register, runToken, usage } from "./praxis.mjs";
 
 const JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2ln";
@@ -227,4 +229,26 @@ test("finish without a registered run does nothing, and its failures say the tok
   p.server.close();
   await assert.rejects(finish(dir, opts({ PRAXIS_BASE_URL: "http://127.0.0.1:1/v1" })),
     /can't reach praxis at http:\/\/127.0.0.1:1\/v1 to end the run .*may still be live/);
+});
+
+test("configure refuses an agent it has no configuration for, and Claude Code without a run token", () => {
+  const dir = mkdtempSync(join(tmpdir(), "praxis-configure-"));
+  // A broker from before run tokens: opencode runs on its placeholder key,
+  // but the Claude credential is only for a registered run.
+  writeFileSync(join(dir, LEGACY_FILE), "");
+  const configure = (env) => spawnSync(process.execPath, [fileURLToPath(new URL("./praxis.mjs", import.meta.url)), "configure", dir],
+    { env: { PATH: process.env.PATH, ...env }, encoding: "utf8" });
+  // (environment, the error)
+  const cases = [
+    [{ AGENT: "claude" }, /PRAXIS_BASE_URL is not set/],
+    [{ PRAXIS_BASE_URL: "http://100.64.0.1:18080/v1" }, /AGENT must be one of opencode, claude, not ''/],
+    [{ PRAXIS_BASE_URL: "http://100.64.0.1:18080/v1", AGENT: "fake" }, /AGENT must be one of opencode, claude, not 'fake'/],
+    [{ PRAXIS_BASE_URL: "http://100.64.0.1:18080/v1", AGENT: "opencode" }, /HOMEGIT_DIR is not set/],
+    [{ PRAXIS_BASE_URL: "http://100.64.0.1:18080/v1", AGENT: "claude" }, /the broker gave no run token/],
+  ];
+  for (const [env, error] of cases) {
+    const result = configure(env);
+    assert.equal(result.status, 1, JSON.stringify(env));
+    assert.match(result.stderr, error);
+  }
 });

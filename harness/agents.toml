@@ -1,17 +1,22 @@
 # The ACP agents bot-harness can run (see src/agents.rs): the command that
 # starts each one's ACP server on stdio, and how it's told the model.
-# The claude and opencode commands are pinned in npm.txt, which devspaces
-# install; agent.yml runs opencode, with inference from the praxis broker
-# (homegit's dotfiles/.config/opencode, see agent/opencode-config.mjs),
-# and claude once the broker can serve it. No
+# opencode and Claude Code's ACP adapter are pinned in npm.txt; agent.yml
+# installs the one it runs, with its launcher, and gives it inference from
+# the praxis broker (opencode with homegit's dotfiles/.config/opencode, see
+# agent/opencode-config.mjs; Claude Code with agent/claude-config.mjs). No
 # secrets here: behind a wrapper, `env` is passed on the command line
 # (env K=V ...), which other users can see.
 
 # Claude Code, through its ACP adapter (@agentclientprotocol/claude-agent-acp).
+# The launcher clears inherited ANTHROPIC_* and CLAUDE_* but the model, and
+# sets the run's environment (the broker and the run token) from the file
+# agent.yml wrote; without that file it refuses to start, rather than have
+# Claude Code look for a login. agent.yml installs it. Opus unless the run
+# names a model.
 [claude]
-command = ["claude-agent-acp"]
+command = ["node", "/usr/local/bin/claude-launch.mjs"]
 model-env = "ANTHROPIC_MODEL"
-env = { DISABLE_AUTOUPDATER = "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1" }
+env = { ANTHROPIC_MODEL = "opus" }
 
 # opencode speaks ACP natively; its model is a session config option. Its
 # providers come only from the global configuration agent/praxis.mjs

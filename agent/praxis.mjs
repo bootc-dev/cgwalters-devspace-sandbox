@@ -6,7 +6,7 @@
 // for summary.json.
 //
 //   praxis.mjs register DIR      needs ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN
-//   praxis.mjs configure DIR     writes runner-sandbox's opencode.json
+//   praxis.mjs configure DIR     writes runner-sandbox's configuration for AGENT
 //   praxis.mjs finish DIR        ends the run; DIR/usage.json is its record
 //
 // While the agent runs, run.mjs also keeps the broker's count of the run's
@@ -14,7 +14,8 @@
 //
 // PRAXIS_BASE_URL is the broker's Responses base URL (http://HOST:PORT/v1);
 // its runs endpoint is beside it. DIR is runner's own (mode 0700): it holds
-// the run token, which reaches runner-sandbox only in its opencode.json.
+// the run token, which reaches runner-sandbox only in its agent's
+// configuration (TOKEN_CONFIG).
 //
 // A broker from before run tokens has no runs endpoint (404). It needs no
 // token and has none to give, so register marks DIR (LEGACY_FILE) and the
@@ -26,7 +27,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OPENCODE_CONFIG_DIR, installOpencodeConfig } from "./opencode-config.mjs";
+import { CLAUDE_RUN_DIR, CLAUDE_RUN_FILE, installClaudeConfig } from "./claude-config.mjs";
+import { OPENCODE_CONFIG_DIR, OPENCODE_CONFIG_FILE, installOpencodeConfig } from "./opencode-config.mjs";
 
 // The audience praxis expects (its RUN_OIDC_AUDIENCE default).
 export const AUDIENCE = "praxis-credential-broker";
@@ -50,7 +52,12 @@ const RETRY_DELAY_MS = 3000;
 // How often the run's request count is fetched while the agent runs:
 // several subagents at once make a request every few seconds between them.
 const REQUESTS_POLL_MS = 5000;
-export { OPENCODE_CONFIG_DIR };
+// The one file of each agent that holds the run token, in runner-sandbox's
+// home (0600, in a directory of its own, 0700).
+export const TOKEN_CONFIG = {
+  opencode: `${OPENCODE_CONFIG_DIR}/${OPENCODE_CONFIG_FILE}`,
+  claude: `${CLAUDE_RUN_DIR}/${CLAUDE_RUN_FILE}`,
+};
 
 function fail(message) {
   console.error(`error: ${message}`);
@@ -198,15 +205,26 @@ export async function register(dir, { env = process.env, retryDelayMs = RETRY_DE
   throw new Error(last);
 }
 
-// Writes runner-sandbox's opencode configuration, readable only by it:
-// homegit's (HOMEGIT_DIR, see opencode-config.mjs) with the run token as
-// its API key, which the broker takes in place of the caller's.
+// Writes runner-sandbox's configuration for AGENT, readable only by it, with
+// the run token, which the broker takes in place of the caller's
+// credential. opencode's is homegit's (HOMEGIT_DIR, see opencode-config.mjs)
+// with the token as its API key; Claude Code's is written whole
+// (claude-config.mjs).
+const CONFIGURE = {
+  opencode(dir, baseURL) {
+    if (!process.env.HOMEGIT_DIR) fail("HOMEGIT_DIR is not set: the homegit checkout with opencode's configuration");
+    return installOpencodeConfig(process.env.HOMEGIT_DIR, { baseURL, apiKey: runToken(dir) ?? PLACEHOLDER_KEY });
+  },
+  claude: (dir, baseURL) => installClaudeConfig({ baseURL, runToken: runToken(dir) }),
+};
+
 function configure(dir) {
   const baseURL = process.env.PRAXIS_BASE_URL;
+  const agent = process.env.AGENT;
   if (!baseURL) fail("PRAXIS_BASE_URL is not set");
-  if (!process.env.HOMEGIT_DIR) fail("HOMEGIT_DIR is not set: the homegit checkout with opencode's configuration");
+  if (!Object.hasOwn(CONFIGURE, agent)) fail(`AGENT must be one of ${Object.keys(CONFIGURE).join(", ")}, not '${agent ?? ""}'`);
   try {
-    console.log(`opencode configuration: ${installOpencodeConfig(process.env.HOMEGIT_DIR, { baseURL, apiKey: runToken(dir) ?? PLACEHOLDER_KEY })}`);
+    console.log(`${agent} configuration: ${CONFIGURE[agent](dir, baseURL)}`);
   } catch (e) {
     fail(e.message);
   }
