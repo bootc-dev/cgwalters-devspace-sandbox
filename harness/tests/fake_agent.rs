@@ -46,13 +46,22 @@ impl Run {
 /// Runs bot-harness on the fake agent in MODE (its arguments), in a new
 /// directory that holds `work/` (the agent's cwd), `out/` and FILES.
 fn run(mode: &[&str], files: &[(&str, &str)], args: &[&str]) -> Run {
+    run_agent(true, mode, files, args)
+}
+
+/// As `run`, for an agent the registry says takes NOTICES during a turn,
+/// or doesn't.
+fn run_agent(notices: bool, mode: &[&str], files: &[(&str, &str)], args: &[&str]) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let path = |name: &str| -> PathBuf { dir.path().join(name) };
     let command: Vec<String> = std::iter::once(FAKE_AGENT)
         .chain(mode.iter().copied())
         .map(|a| a.replace("{dir}", &dir.path().to_string_lossy()))
         .collect();
-    let registry = format!("[fake]\ncommand = {}\n", json!(command));
+    let registry = format!(
+        "[fake]\ncommand = {}\nnotices = {notices}\n",
+        json!(command)
+    );
     std::fs::write(path("agents.toml"), registry).unwrap();
     std::fs::write(path("prompt.md"), "Do the fake task.\n").unwrap();
     std::fs::create_dir(path("work")).unwrap();
@@ -356,6 +365,26 @@ fn notices_as_the_budget_goes() {
     assert_eq!(s["notices"], json!(["60%", "80%"]));
     assert_eq!(s["stopped_early"], false);
     assert_eq!(s["limits"]["max_requests"], 100);
+}
+
+/// An agent that isn't known to queue a prompt behind its turn is sent
+/// none during it, and is still interrupted to hand back.
+#[test]
+fn no_notices_for_an_agent_that_takes_none() {
+    let r = run_agent(
+        false,
+        &["script", "{dir}/script.json", "{dir}/later.json"],
+        &[
+            ("script.json", r#"[{"sleep": 60}, {"say": "Not reached."}]"#),
+            ("later.json", r#"[{"say": "Handed back."}]"#),
+        ],
+        // A second to hand back in.
+        &["--timeout", "20s"],
+    );
+    assert_result(&r, 124, "timeout");
+    assert_eq!(notices(&r), ["hand back"]);
+    assert_eq!(r.result["handed_back"], true);
+    assert!(r.stdout.contains("» Handed back."), "{}", r.stdout);
 }
 
 /// A turn the harness interrupts near a limit, and what the agent does in

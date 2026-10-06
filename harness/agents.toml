@@ -13,6 +13,11 @@
 # agent.yml wrote; without that file it refuses to start, rather than have
 # Claude Code look for a login. agent.yml installs it. Opus unless the run
 # names a model.
+#
+# No `notices`: the adapter queues a prompt sent during a turn as a turn of
+# its own, and when Claude Code takes it up answers the running one with
+# end_turn, which would end the run as done. Its `_session/steering`
+# request is what would deliver one inside the turn.
 [claude]
 command = ["node", "/usr/local/bin/claude-launch.mjs"]
 model-env = "ANTHROPIC_MODEL"
@@ -33,8 +38,11 @@ env = { ANTHROPIC_MODEL = "opus" }
 # restoring the deliberate disable controls and selecting the optional
 # installed profile. agent.yml installs it.
 command = ["node", "/usr/local/bin/opencode-launch.mjs"]
+# A prompt sent during a turn reaches the model at its next step.
+notices = true
 
 # A scripted agent with no model behind it (src/bin/fake-acp-agent.rs),
 # for runs without inference: it plays fake-agent-demo.json.
 [fake]
 command = ["fake-acp-agent", "demo"]
+notices = true

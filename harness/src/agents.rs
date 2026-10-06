@@ -11,7 +11,8 @@
 //! ```
 //!
 //! An agent without `model-env` gets its model through its `model`
-//! session config option (ACP's `session/set_config_option`).
+//! session config option (ACP's `session/set_config_option`). One with
+//! `notices = true` is sent the budget's notices during its turn.
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -28,6 +29,14 @@ pub struct AgentSpec {
     pub env: BTreeMap<String, String>,
     /// The environment variable that selects the agent's model.
     pub model_env: Option<String>,
+    /// Whether the agent takes a `session/prompt` sent during a turn as a
+    /// message for the model's next step of that turn, which is how the
+    /// budget's notices reach it. Off unless the agent is known to: one
+    /// that makes it a turn of its own answers the running turn as ended
+    /// (claude-agent-acp does, with `end_turn`), and the run would stop
+    /// there as if the task were done.
+    #[serde(default)]
+    pub notices: bool,
 }
 
 fn valid_env_name(name: &str) -> bool {
@@ -205,6 +214,17 @@ command = ["opencode", "acp"]
                 "{agent}"
             );
         }
+    }
+
+    /// Only the agents known to queue a prompt behind the step they are on
+    /// are sent notices.
+    #[test]
+    fn notices() {
+        for (agent, want) in [("opencode", true), ("fake", true), ("claude", false)] {
+            let spec = parse(include_str!("../agents.toml"), agent).unwrap();
+            assert_eq!(spec.notices, want, "{agent}");
+        }
+        assert!(!parse(REGISTRY, "opencode").unwrap().notices);
     }
 
     #[test]

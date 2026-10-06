@@ -180,9 +180,11 @@ requests, counted by the broker, so a subagent's count too: `run.mjs`
 fetches the count while the agent runs, since ACP reports none) and
 `max_tasks` (4 subagent tasks). At 60% and 80% of the most used of the
 first two, and with the last task, it sends a notice as a prompt of its
-own during the turn, which opencode gives the model at its next step
-(an agent that took such a prompt as an interruption would need them
-turned off). At 95% of the time, with ten model requests left (a quarter
+own during the turn, which opencode gives the model at its next step.
+Only an agent with `notices = true` in `harness/agents.toml` is sent them:
+Claude Code's adapter makes such a prompt a turn of its own and ends the
+running one for it, so a claude run gets no notice, only the hand-back.
+At 95% of the time, with ten model requests left (a quarter
 of a cap under 40), or with one task too many, it cancels the turn, whatever is running in it, and
 gives the agent one more turn to hand back: write its outcome and stop.
 At the limit it cancels the session. `summary.json` then has

@@ -3,7 +3,8 @@
 //!
 //! The session is the task's prompt turn, and what the run's budget
 //! (`budget`) adds to it: notices, sent as prompts of their own while the
-//! turn runs, which agents queue behind the step they are on; then, near
+//! turn runs, to the agents that queue them behind the step they are on
+//! (`AgentSpec::notices`; another would end its turn for one); then, near
 //! a limit, a `session/cancel` of the turn and one more prompt turn in
 //! which the agent hands back; and at the limit a last `session/cancel`.
 //!
@@ -419,6 +420,7 @@ pub async fn run(opts: RunOptions) -> Result<RunResult> {
                 opts.model.as_deref(),
                 opts.agent.model_env.is_some(),
                 &opts.prompt,
+                opts.agent.notices,
                 Signals {
                     stop: stop_rx,
                     nudges: nudge_rx,
@@ -617,6 +619,7 @@ async fn session(
     model: Option<&str>,
     model_by_env: bool,
     prompt: &str,
+    notices: bool,
     signals: Signals,
 ) -> Ended {
     let Signals {
@@ -654,9 +657,13 @@ async fn session(
                 return stop_turn(&cx, &sid, &cancelling, why, response.as_mut()).await;
             }
             Some(nudge) = nudges.recv() => match nudge {
-                // Agents take a prompt during a turn as a message for the
-                // model's next step; its answer comes with the turn's, and
-                // one that refuses it only goes without (the digest says).
+                // An agent that would end its turn for a prompt sent
+                // during it goes without: it is still interrupted to hand
+                // back.
+                Nudge::Notice { .. } if !notices => {}
+                // The others take it as a message for the model's next
+                // step; its answer comes with the turn's, and one that
+                // refuses it only goes without (the digest says).
                 Nudge::Notice { label, text } => {
                     let answer = cx.send_request(notice_prompt(&sid, &label, text)).block_task();
                     tokio::spawn(async move {
