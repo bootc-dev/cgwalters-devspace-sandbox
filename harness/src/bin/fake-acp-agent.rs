@@ -7,7 +7,10 @@
 //!
 //! ```text
 //! fake-acp-agent demo          play the built-in session (fake-agent-demo.json)
-//! fake-acp-agent script FILE   play the session in FILE
+//! fake-acp-agent script FILE [LATER]
+//!                              play the session in FILE, and for every
+//!                              prompt turn after the first the one in
+//!                              LATER (default: one line of text)
 //! fake-acp-agent fs            send fs/* and terminal/* requests the client
 //!                              doesn't advertise, expecting each answered
 //! fake-acp-agent flood N       send N agent_message_chunk notifications
@@ -25,8 +28,15 @@
 //!  {"execute": {"title": "Bash", "command": "git status"}},
 //!  {"read": {"title": "Read", "path": "{cwd}/README.md", "lines": 5}},
 //!  {"write": {"title": "Write", "path": "{cwd}/x", "content": "..."}},
-//!  {"cost": {"usd": 0.01}}]
+//!  {"cost": {"usd": 0.01}},
+//!  {"task": "Review the change"},
+//!  {"sleep": 1.5}]
 //! ```
+//!
+//! A `task` is a subagent's tool call as opencode reports one, done at
+//! once. A `sleep` (seconds) ends early when the client cancels the turn. As
+//! real agents do, it takes a `session/prompt` that arrives during a turn
+//! without starting another one, and answers it when the turn ends.
 //!
 //! `{cwd}` is the session's working directory and `{home}` is `$HOME`.
 //! Commands run with `sh -c` in the session's working directory.
@@ -51,6 +61,10 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
 const FS_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long `grace` mode waits before its late permission request.
 const GRACE_DELAY: Duration = Duration::from_secs(1);
+/// How often a `sleep` step looks for a cancel.
+const SLEEP_SLICE: Duration = Duration::from_millis(50);
+/// What a later prompt turn says without a script of its own.
+const LATER_TEXT: &str = "Nothing more to do.";
 const ALLOW: &str = "allow";
 const REJECT: &str = "reject";
 
@@ -75,10 +89,13 @@ enum Step {
     Cost {
         usd: f64,
     },
+    Task(String),
+    Sleep(f64),
 }
 
 enum Mode {
-    Script(Vec<Step>),
+    /// The first prompt turn's steps, and every later one's.
+    Script(Vec<Step>, Vec<Step>),
     Fs,
     Flood(usize),
     Grace,
@@ -88,17 +105,27 @@ enum Mode {
 fn parse_mode(args: &[String]) -> Result<Mode> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     Ok(match args.as_slice() {
-        ["demo"] => Mode::Script(parse_script(DEMO).context("in the built-in demo")?),
-        ["script", file] => {
-            let text = std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
-            Mode::Script(parse_script(&text).with_context(|| format!("in {file}"))?)
-        }
+        ["demo"] => Mode::Script(
+            parse_script(DEMO).context("in the built-in demo")?,
+            later_default(),
+        ),
+        ["script", file] => Mode::Script(read_script(file)?, later_default()),
+        ["script", file, later] => Mode::Script(read_script(file)?, read_script(later)?),
         ["fs"] => Mode::Fs,
         ["flood", n] => Mode::Flood(n.parse().with_context(|| format!("flood: bad count {n}"))?),
         ["grace"] => Mode::Grace,
         ["slow-init"] => Mode::SlowInit,
-        _ => bail!("usage: {NAME} demo | script FILE | fs | flood N | grace | slow-init"),
+        _ => bail!("usage: {NAME} demo | script FILE [LATER] | fs | flood N | grace | slow-init"),
     })
+}
+
+fn later_default() -> Vec<Step> {
+    vec![Step::Say(LATER_TEXT.to_owned())]
+}
+
+fn read_script(file: &str) -> Result<Vec<Step>> {
+    let text = std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
+    parse_script(&text).with_context(|| format!("in {file}"))
 }
 
 fn parse_script(text: &str) -> Result<Vec<Step>> {
@@ -112,6 +139,10 @@ struct Conn {
     next_id: u64,
     /// The client sent session/cancel.
     cancelled: bool,
+    /// A prompt turn is running.
+    in_turn: bool,
+    /// The ids of the prompts that arrived during it.
+    queued: Vec<Value>,
 }
 
 impl Conn {
@@ -134,6 +165,8 @@ impl Conn {
             rx,
             next_id: 1,
             cancelled: false,
+            in_turn: false,
+            queued: Vec::new(),
         }
     }
 
@@ -168,6 +201,9 @@ impl Conn {
         };
         if msg["method"] == "session/cancel" {
             self.cancelled = true;
+        }
+        if self.in_turn && msg["method"] == "session/prompt" {
+            self.queued.push(msg["id"].clone());
         }
         Some(msg)
     }
@@ -207,6 +243,7 @@ fn model_options(current: &str) -> Value {
 /// exiting after the prompt turn would race the client's cancel.
 fn serve(conn: &mut Conn, mode: &Mode) -> Result<()> {
     let mut cwd = PathBuf::from(".");
+    let mut turns = 0;
     loop {
         let Some(msg) = conn.recv(None) else {
             unreachable!("recv without a timeout exits at the end of stdin")
@@ -238,7 +275,14 @@ fn serve(conn: &mut Conn, mode: &Mode) -> Result<()> {
             }
             Some("session/prompt") => {
                 conn.cancelled = false;
-                let stop = prompt(conn, mode, &cwd)?;
+                conn.in_turn = true;
+                let stop = prompt(conn, mode, turns, &cwd)?;
+                conn.in_turn = false;
+                turns += 1;
+                // The prompts taken during the turn end with it.
+                for queued in std::mem::take(&mut conn.queued) {
+                    conn.respond(&queued, json!({"stopReason": stop}));
+                }
                 conn.respond(&id, json!({"stopReason": stop}));
             }
             // Notifications (a cancel before the prompt) need no answer.
@@ -250,10 +294,11 @@ fn serve(conn: &mut Conn, mode: &Mode) -> Result<()> {
     }
 }
 
-/// Runs one prompt turn; returns its stop reason.
-fn prompt(conn: &mut Conn, mode: &Mode, cwd: &Path) -> Result<&'static str> {
+/// Runs prompt turn number TURN (from 0); returns its stop reason.
+fn prompt(conn: &mut Conn, mode: &Mode, turn: usize, cwd: &Path) -> Result<&'static str> {
     match mode {
-        Mode::Script(steps) => {
+        Mode::Script(first, later) => {
+            let steps = if turn == 0 { first } else { later };
             let home = std::env::var("HOME").unwrap_or_default();
             let fill = |s: &str| {
                 s.replace("{cwd}", &cwd.to_string_lossy())
@@ -350,6 +395,27 @@ fn play(
             );
             return Ok(());
         }
+        Step::Task(description) => {
+            conn.update(json!({"sessionUpdate": "tool_call", "toolCallId": id,
+                "title": "task", "kind": "think", "status": "pending",
+                "rawInput": {"description": description}}));
+            conn.update(
+                json!({"sessionUpdate": "tool_call_update", "toolCallId": id,
+                "title": description, "status": "completed"}),
+            );
+            return Ok(());
+        }
+        Step::Sleep(secs) => {
+            let end = Instant::now() + Duration::try_from_secs_f64(*secs)?;
+            while !conn.cancelled {
+                let left = end.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                conn.recv(Some(left.min(SLEEP_SLICE)));
+            }
+            return Ok(());
+        }
         Step::Execute { title, command } => (title, "execute", json!({"command": fill(command)})),
         Step::Read { title, path, lines } => {
             (title, "read", json!({"path": fill(path), "lines": lines}))
@@ -426,7 +492,9 @@ fn play(
                 Err(e) => (false, format!("writing {path}: {e}"), Value::Null),
             }
         }
-        Step::Say(_) | Step::Cost { .. } => unreachable!("handled above"),
+        Step::Say(_) | Step::Cost { .. } | Step::Task(_) | Step::Sleep(_) => {
+            unreachable!("handled above")
+        }
     };
     let mut done = json!({"sessionUpdate": "tool_call_update", "toolCallId": id,
         "status": if ok { "completed" } else { "failed" }, "content": text_content(&text)});
@@ -466,6 +534,7 @@ mod tests {
             (&["flood", "3"], true),
             (&["flood", "x"], false),
             (&["script"], false),
+            (&["script", "/nonexistent"], false),
             (&["nope"], false),
             (&[], false),
         ] {
@@ -473,5 +542,9 @@ mod tests {
         }
         let bad = r#"[{"say": "x"}, {"execute": {"command": "true"}}]"#;
         assert!(parse_script(bad).is_err());
+        assert_eq!(
+            parse_script(r#"[{"sleep": 0.5}]"#).unwrap(),
+            [Step::Sleep(0.5)]
+        );
     }
 }
