@@ -9,6 +9,9 @@
 //   praxis.mjs configure DIR     writes runner-sandbox's opencode.json
 //   praxis.mjs finish DIR        ends the run; DIR/usage.json is its record
 //
+// While the agent runs, run.mjs also keeps the broker's count of the run's
+// model requests in a file (countRequests), for bot-harness's cap on them.
+//
 // PRAXIS_BASE_URL is the broker's Responses base URL (http://HOST:PORT/v1);
 // its runs endpoint is beside it. DIR is runner's own (mode 0700): it holds
 // the run token, which reaches runner-sandbox only in its opencode.json.
@@ -44,6 +47,9 @@ const HTTP_TIMEOUT_MS = 30_000;
 // with the same run (and a new token), so a lost reply costs nothing.
 const REGISTER_ATTEMPTS = 4;
 const RETRY_DELAY_MS = 3000;
+// How often the run's request count is fetched while the agent runs:
+// several subagents at once make a request every few seconds between them.
+const REQUESTS_POLL_MS = 5000;
 export { OPENCODE_CONFIG_DIR };
 
 function fail(message) {
@@ -204,6 +210,55 @@ function configure(dir) {
   } catch (e) {
     fail(e.message);
   }
+}
+
+// The run's usage record so far, or null when the broker has none to give
+// right now (no run token, unreachable, an answer that isn't one): the
+// count is advisory, so nothing here is an error.
+export async function usage(dir, { env = process.env } = {}) {
+  try {
+    const token = runToken(dir);
+    if (!token || !env.PRAXIS_BASE_URL) return null;
+    const r = await http(runsUrl(env.PRAXIS_BASE_URL, "/self"), { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return null;
+    const record = await r.json();
+    return record?.schema === RECORD_SCHEMA ? record : null;
+  } catch {
+    return null;
+  }
+}
+
+// The model requests of a usage record: those the broker metered and
+// those that were answered without usage (`unmetered`: all of them, until
+// the broker meters this upstream's). Null if it has no count.
+export function modelRequests(record) {
+  const counts = [record?.requests, record?.unmetered ?? 0];
+  return counts.every((n) => Number.isSafeInteger(n) && n >= 0) ? counts[0] + counts[1] : null;
+}
+
+// Keeps FILE at the number of model requests the broker has answered for
+// the run, subagents' included: what bot-harness's --requests-file reads,
+// since ACP reports none. A count that can't be fetched leaves the file as
+// it is. Returns a function that stops it.
+export function countRequests(dir, file, { env = process.env, intervalMs = REQUESTS_POLL_MS } = {}) {
+  let busy = false;
+  let stopped = false;
+  const poll = async () => {
+    if (busy) return;
+    busy = true;
+    const requests = modelRequests(await usage(dir, { env }));
+    busy = false;
+    if (stopped || requests === null) return;
+    try {
+      writePrivate(file, `${requests}\n`);
+    } catch { /* the next one may do */ }
+  };
+  const timer = setInterval(poll, intervalMs);
+  poll();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 // Ends the run, so its token admits nothing more, and keeps the final usage

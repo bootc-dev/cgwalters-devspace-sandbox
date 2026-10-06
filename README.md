@@ -173,6 +173,25 @@ the cost it reports, or a number of tool calls. `bot-harness summary` then
 writes `summary.json` and the step summary from the recording, the same way
 for every agent.
 
+A run cancelled at its limit hands back nothing, so the harness tells the
+agent how far along it is (`harness/src/budget.rs`). The limits are the
+`timeout` input (75 minutes by default), `max_requests` (150 model
+requests, counted by the broker, so a subagent's count too: `run.mjs`
+fetches the count while the agent runs, since ACP reports none) and
+`max_tasks` (4 subagent tasks). At 60% and 80% of the most used of the
+first two, and with the last task, it sends a notice as a prompt of its
+own during the turn, which opencode gives the model at its next step
+(an agent that took such a prompt as an interruption would need them
+turned off). At 95% of the time, with ten model requests left (a quarter
+of a cap under 40), or with one task too many, it cancels the turn, whatever is running in it, and
+gives the agent one more turn to hand back: write its outcome and stop.
+At the limit it cancels the session. `summary.json` then has
+`stopped_early: true`, `handed_back` (whether that last turn finished)
+and the `notices` sent, and the result stays `timeout` or `budget`. The
+working tree is collected in every case, with `stopped_early` set in
+`outcome.json` if the agent didn't get to it, so a change that was done
+but not reported is still handed back, as a partial one.
+
 `bot-runs dispatch` in `cgwalters-bot/homegit` puts homegit's runner-side
 worker brief (`dotfiles/.agents/skills/coordinator/runner-preamble.md`) before
 the task, so the agent knows it has no credentials and that its only outputs

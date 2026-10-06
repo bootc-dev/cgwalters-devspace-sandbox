@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { buildOutputs, defaultPullRequest, runBranch, writeHandback } from "./handback.mjs";
+import { buildOutputs, defaultPullRequest, markStoppedEarly, runBranch, writeHandback } from "./handback.mjs";
 import { checkOutputs, compilePolicy } from "../safe-outputs/safe-outputs.mjs";
 import { BASE, REPO, repoWith, scratch, write } from "../safe-outputs/test-helpers.mjs";
 
@@ -38,6 +38,31 @@ test("defaultPullRequest", () => {
   assert.equal(defaultPullRequest({}, 9).title, "Agent run 9");
   assert.equal(defaultPullRequest({ summary: "x".repeat(300) }, 9).title.length, 100);
   assert.equal(defaultPullRequest({ summary: "  one\n\ntwo  " }, 9).title, "one");
+  assert.equal(defaultPullRequest({ summary: "one" }, 9).body, "one");
+  assert.equal(defaultPullRequest({ summary: "one", stopped_early: "out of\ntime" }, 9).body,
+    "one\n\nPartial change: the run stopped early (out of time).");
+  assert.equal(defaultPullRequest({ stopped_early: true }, 9).body, "Changes from agent run 9.\n\nPartial change: the run stopped early.");
+  assert.equal(defaultPullRequest({ summary: "one", stopped_early: null }, 9).body, "one");
+});
+
+test("markStoppedEarly", () => {
+  const stopped = { result: "timeout", message: "hit the timeout; cancelled" };
+  const cases = [
+    // [outcome, harness.json, the outcome's stopped_early]
+    [{}, stopped, "the run was stopped at a limit: hit the timeout; cancelled"],
+    [{ stopped_early: null }, { result: "budget" }, "the run was stopped at a limit: budget"],
+    // What the agent said while handing back stands.
+    [{ stopped_early: "out of requests" }, stopped, "out of requests"],
+    [{}, { result: "success" }, undefined],
+    [{}, { result: "failure", message: "the agent failed" }, undefined],
+    // No harness.json: bot-harness was killed.
+    [{}, null, undefined],
+  ];
+  for (const [outcome, harness, want] of cases) {
+    const got = markStoppedEarly({ summary: "s", ...outcome }, harness);
+    assert.equal(got.summary, "s");
+    assert.equal(got.stopped_early ?? undefined, want, JSON.stringify([outcome, harness]));
+  }
 });
 
 const policyFor = (outputs) => compilePolicy({ repo: REPO, base: BASE, workflow: "branch", outputs, maxOutputs: "3" }).policy;

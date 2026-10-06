@@ -12,9 +12,15 @@
 // harness/agents.toml, answers its permission requests from
 // harness/policy.toml, enforces the timeout and budget, records the
 // protocol stream (acp.jsonl) as the transcript, and writes summary.json.
+// It also warns the agent as the run nears its timeout, its cap on model
+// requests (the broker's count, kept in a file for it here) or on subagent
+// tasks, and has it hand back before it stops the session
+// (harness/src/budget.rs): what the working tree holds is collected either
+// way, as a partial change when the run stopped early.
 //
 // Environment (from the workflow): ITEM REPO BASE AGENT MODEL CORES
-// TIMEOUT_MINUTES BUDGET WORKFLOW BRIEF OUT POLICY (the run's safe-outputs
+// TIMEOUT_MINUTES BUDGET MAX_REQUESTS MAX_TASKS (0 or unset: no cap)
+// WORKFLOW BRIEF OUT POLICY (the run's safe-outputs
 // policy, compiled from the dispatch inputs by safe-outputs/safe-outputs.mjs),
 // PRAXIS_BASE_URL and PRAXIS_DIR
 // (agent/praxis.mjs, which registered the run and configured the agent)
@@ -30,8 +36,8 @@ import { fileURLToPath } from "node:url";
 import { agentCommand, asAgent, killAgent } from "../scripts/agent-lib.mjs";
 import { collect as collectEgressLog, logOffset as egressLogOffset } from "../scripts/egress-proxy.mjs";
 import { SANDBOX_HOME, fail, run } from "../scripts/runner-sandbox.mjs";
-import { USAGE_FILE, finish as finishPraxisRun, runToken } from "./praxis.mjs";
-import { writeHandback } from "./handback.mjs";
+import { USAGE_FILE, countRequests, finish as finishPraxisRun, runToken } from "./praxis.mjs";
+import { markStoppedEarly, writeHandback } from "./handback.mjs";
 import { makeRedactor, redactTree } from "./redact.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,7 +46,10 @@ const HARNESS_BIN = join(ROOT, "target/release/bot-harness");
 const HARNESS_DIR = join(ROOT, "harness");
 const SOCKET_STDIO = join(ROOT, "scripts/socket-stdio.mjs");
 // The files bot-harness run writes, which go into the transcript.
-const HARNESS_FILES = ["acp.jsonl", "agent-stderr.log", "harness.json"];
+const HARNESS_RESULT = "harness.json";
+const HARNESS_FILES = ["acp.jsonl", "agent-stderr.log", HARNESS_RESULT];
+// The caps that are optional, as bot-harness's flags.
+const CAPS = { MAX_REQUESTS: "--max-requests", MAX_TASKS: "--max-tasks" };
 // The agents that need inference. They get it from the praxis credential
 // broker on the tailnet (PRAXIS_BASE_URL), which holds the subscription
 // login: nothing on this runner has a model credential, and the agent has
@@ -90,6 +99,9 @@ function validate() {
   if (!/^[A-Za-z0-9_][A-Za-z0-9_./-]{0,199}$/.test(env.BASE) || env.BASE.includes("..")) {
     fail("bad base ref (letters, digits and _ . / - only)");
   }
+  for (const name of Object.keys(CAPS)) {
+    if (!/^\d{1,6}$/.test(env[name] ?? "0")) fail(`${name} must be a number, not '${env[name]}'`);
+  }
   if (!AGENTS.includes(env.AGENT)) {
     fail(`no agent '${env.AGENT}' (only ${AGENTS.join(", ")})`);
   }
@@ -105,7 +117,7 @@ function validate() {
 // Runs the agent through bot-harness, which prints the condensed
 // transcript: redacted here, to the log and CONDENSED. Returns its exit
 // status.
-async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, promptFile }) {
+async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, promptFile, requestsFile }) {
   // Checked as the agent: the checkout is runner-sandbox's.
   const instructions = (INSTRUCTION_FILES[env.AGENT] ?? [])
     .filter((name) => asAgent(["test", "-f", `${workdir}/${name}`]).status === 0);
@@ -117,11 +129,17 @@ async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, p
   // can't hand to PID 1 from this service (see socket-stdio.mjs).
   const [sudo, wrapper] = agentCommand([], { cwd: workdir });
   const limit = Number(env.TIMEOUT_MINUTES) * 60 + HARNESS_GRACE_S;
+  const cap = (name) => Number(env[name] ?? 0);
+  // Model requests are capped only where something counts them.
+  const caps = [
+    ...(cap("MAX_REQUESTS") > 0 && requestsFile ? [CAPS.MAX_REQUESTS, String(cap("MAX_REQUESTS")), "--requests-file", requestsFile] : []),
+    ...(cap("MAX_TASKS") > 0 ? [CAPS.MAX_TASKS, String(cap("MAX_TASKS"))] : []),
+  ];
   const harness = spawn("timeout", ["--kill-after=30", `${limit}s`, HARNESS_BIN, "run",
     "--agent", env.AGENT, "--agents", join(HARNESS_DIR, "agents.toml"), ...(env.MODEL ? ["--model", env.MODEL] : []),
     "--cwd", workdir, "--prompt", promptFile, "--out", harnessOut,
     "--permissions", join(HARNESS_DIR, "policy.toml"),
-    "--timeout", `${env.TIMEOUT_MINUTES}m`, "--budget-aic", env.BUDGET,
+    "--timeout", `${env.TIMEOUT_MINUTES}m`, "--budget-aic", env.BUDGET, ...caps,
     "--", process.execPath, SOCKET_STDIO, sudo, ...wrapper], { stdio: ["ignore", "pipe", openSync(stderrLog, "w")] });
   const closed = new Promise((resolve) => harness.on("close", (code) => resolve(code ?? 128)));
   const condensedOut = createWriteStream(condensed);
@@ -139,8 +157,9 @@ async function runHarness({ workdir, redact, harnessOut, condensed, stderrLog, p
 
 // Collects what the agent left, reading its files as the agent: as root, a
 // link planted there could copy the runner's secrets into an artifact.
-// BASE is the commit the checkout started from.
-function collect({ workdir, base, runDir, outDir, policy }) {
+// BASE is the commit the checkout started from, HARNESS bot-harness's
+// result.
+function collect({ workdir, base, runDir, outDir, policy, harness }) {
   const git = (args, { limit } = {}) => asAgent(limit
     ? ["sh", "-c", `"$@" | head -c ${limit}`, "sh", ...AGENT_GIT, "-C", workdir, ...args]
     : [...AGENT_GIT, "-C", workdir, ...args]);
@@ -158,6 +177,7 @@ function collect({ workdir, base, runDir, outDir, policy }) {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) outcome = parsed;
     } catch { /* not JSON: none */ }
   }
+  outcome = markStoppedEarly(outcome, harness);
   writeFileSync(join(runDir, "outcome.json"), `${JSON.stringify(outcome)}\n`);
   const requests = asAgent(["head", "-c", String(MAX_AGENT_OUTPUTS_BYTES + 1), AGENT_OUTPUTS]);
   const agentText = requests.status === 0 && requests.stdout.length <= MAX_AGENT_OUTPUTS_BYTES ? requests.stdout.toString() : "";
@@ -209,10 +229,23 @@ async function main() {
   console.log(`::group::${LOG_GROUP}`);
   const condensed = join(runDir, "condensed.log");
   const harnessOut = join(work, "harness");
-  const exitCode = await runHarness({ workdir, redact, harnessOut, condensed,
+  // The broker's count of the run's model requests, for bot-harness's cap:
+  // only a broker with run tokens counts them.
+  const requestsFile = praxisDir && runToken(praxisDir) ? join(work, "requests") : null;
+  if (!requestsFile && Number(env.MAX_REQUESTS ?? 0) > 0) {
+    console.log(`nothing counts this run's model requests, so its cap of ${env.MAX_REQUESTS} doesn't apply`);
+  }
+  const stopCounting = requestsFile ? countRequests(praxisDir, requestsFile) : () => {};
+  const exitCode = await runHarness({ workdir, redact, harnessOut, condensed, requestsFile,
     stderrLog: join(work, "harness-stderr.log"), promptFile: join(work, "prompt.md") });
+  stopCounting();
   // bot-harness says itself why it stopped, unless it was killed.
-  if (exitCode !== 0 && !existsSync(join(harnessOut, "harness.json"))) {
+  let harness = exitCode === EXIT_TIMEOUT ? { result: "timeout", message: `killed after ${env.TIMEOUT_MINUTES}m` } : null;
+  if (existsSync(join(harnessOut, HARNESS_RESULT))) {
+    try {
+      harness = JSON.parse(readFileSync(join(harnessOut, HARNESS_RESULT), "utf8"));
+    } catch { /* cut short: as if it wrote none */ }
+  } else if (exitCode !== 0) {
     const line = exitCode === EXIT_TIMEOUT ? `⚠ agent timed out after ${env.TIMEOUT_MINUTES}m` : `⚠ bot-harness exited ${exitCode}`;
     console.log(line);
     appendFileSync(condensed, `${line}\n`);
@@ -233,7 +266,7 @@ async function main() {
   }
 
   console.log("::group::Collect the run's files");
-  const { files, patch } = collect({ workdir, base, runDir, outDir, policy });
+  const { files, patch } = collect({ workdir, base, runDir, outDir, policy, harness });
   if (patch?.error) console.log(`::warning::no change handed back: ${oneLine(patch.error)}`);
   for (const f of [...HARNESS_FILES.map((name) => join(harnessOut, name)), join(work, "harness-stderr.log")]) {
     if (existsSync(f)) copyFileSync(f, join(tx, basename(f)));

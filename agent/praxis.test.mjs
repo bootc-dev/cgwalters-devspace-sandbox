@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { AUDIENCE, LEGACY_FILE, RECORD_SCHEMA, TOKEN_FILE, USAGE_FILE, finish, register, runToken } from "./praxis.mjs";
+import { AUDIENCE, LEGACY_FILE, RECORD_SCHEMA, TOKEN_FILE, USAGE_FILE, countRequests, finish, modelRequests, register, runToken, usage } from "./praxis.mjs";
 
 const JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2ln";
 const REQUEST_TOKEN = "request-token";
@@ -16,8 +16,9 @@ const WORKFLOW_REF = "owner/repo/.github/workflows/agent.yml@refs/heads/main";
 // A server whose /v1/runs answers with each of STATUSES in turn (the last
 // one repeating), each a status or [status, body], granting a run of TTL_S
 // seconds; records the registrations it got. DELETE /v1/runs/self answers
-// FINISH_ANSWER.
-async function fakePraxis(statuses, { ttlS = 3600, finishAnswer = [200, { schema: RECORD_SCHEMA }] } = {}) {
+// FINISH_ANSWER, and GET the next of USAGE_ANSWERS (the last one repeating).
+async function fakePraxis(statuses, { ttlS = 3600, finishAnswer = [200, { schema: RECORD_SCHEMA }], usageAnswers = [] } = {}) {
+  let usageAsked = 0;
   const seen = [];
   const server = createServer((req, res) => {
     let data = "";
@@ -35,6 +36,14 @@ async function fakePraxis(statuses, { ttlS = 3600, finishAnswer = [200, { schema
         seen.push({ auth: req.headers.authorization, method: "DELETE" });
         res.statusCode = finishAnswer[0];
         res.end(JSON.stringify(finishAnswer[1]));
+        return;
+      }
+      if (req.method === "GET") {
+        assert.equal(url.pathname, "/v1/runs/self");
+        assert.equal(req.headers.authorization, `Bearer ${RUN_TOKEN}`);
+        const [status, body] = usageAnswers[Math.min(usageAsked++, usageAnswers.length - 1)];
+        res.statusCode = status;
+        res.end(JSON.stringify(body));
         return;
       }
       assert.equal(url.pathname, "/v1/runs");
@@ -159,6 +168,30 @@ test("finish ends the run with its token and keeps the record private", async ()
   assert.deepEqual(p.seen.at(-1), { auth: `Bearer ${RUN_TOKEN}`, method: "DELETE" });
   assert.deepEqual(JSON.parse(readFileSync(join(dir, USAGE_FILE), "utf8")), record);
   assert.equal(statSync(join(dir, USAGE_FILE)).mode & 0o777, 0o600);
+});
+
+test("the run's request count is kept in a file while the broker gives one", async () => {
+  const record = (requests, unmetered) => [200, { schema: RECORD_SCHEMA, state: "active", requests, unmetered }];
+  const p = await fakePraxis([201], { usageAnswers: [record(3), [500, {}], [200, { schema: "other/v1", requests: 9 }], record(2, 5)] });
+  const dir = newDir();
+  await register(dir, opts(p.env));
+  assert.equal((await usage(dir, { env: p.env })).requests, 3);
+  // A broker that fails or answers something else gives no count.
+  assert.equal(await usage(dir, { env: p.env }), null);
+  assert.equal(await usage(dir, { env: p.env }), null);
+  const file = join(dir, "requests");
+  const stop = countRequests(dir, file, { env: p.env, intervalMs: 5 });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  stop();
+  p.server.close();
+  // Requests the broker couldn't meter are requests all the same.
+  assert.equal(readFileSync(file, "utf8"), "7\n");
+  for (const [rec, want] of [[{ requests: 3 }, 3], [{ requests: 0, unmetered: 88 }, 88], [{ unmetered: 2 }, null], [{ requests: -1 }, null], [null, null]]) {
+    assert.equal(modelRequests(rec), want, JSON.stringify(rec));
+  }
+  // Without a run, or a broker to ask, there is no count either.
+  assert.equal(await usage(newDir(), { env: p.env }), null);
+  assert.equal(await usage(dir, { env: { PRAXIS_BASE_URL: "http://127.0.0.1:1/v1" } }), null);
 });
 
 test("finish without a registered run does nothing, and its failures say the token may be live", async () => {

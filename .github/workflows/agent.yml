@@ -68,10 +68,21 @@ on:
         type: choice
         options: ["4", "16", "64"]
         default: "4"
+      # The run's limits. bot-harness warns the agent as it nears one, has
+      # it hand back at 95%, and stops the session at the limit: the
+      # working tree is collected either way (harness/src/budget.rs).
       timeout:
         description: "Minutes the agent may run (at most 330)"
         type: string
-        default: "120"
+        default: "75"
+      max_requests:
+        description: "Most model requests the run may make, subagents' included, as the broker counts them (0: no cap)"
+        type: string
+        default: "150"
+      max_tasks:
+        description: "Most subagent tasks the agent may start (0: no cap)"
+        type: string
+        default: "4"
       budget:
         description: "Spend cap in AIC (1 AIC = $0.01), for agents with priced inference"
         type: string
@@ -171,6 +182,8 @@ jobs:
         env:
           TIMEOUT: ${{ inputs.timeout }}
           BUDGET: ${{ inputs.budget }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+          MAX_TASKS: ${{ inputs.max_tasks }}
           AGENT: ${{ inputs.agent }}
           HOMEGIT: ${{ inputs.homegit }}
           HOMEGIT_REF: ${{ inputs.homegit_ref }}
@@ -182,6 +195,14 @@ jobs:
           fi
           if ! [[ "$BUDGET" =~ ^(0|[1-9][0-9]{0,5})(\.[0-9]+)?$ ]]; then
             echo "::error::budget must be a number of AIC, not '$BUDGET'"
+            exit 1
+          fi
+          if ! [[ "$MAX_REQUESTS" =~ ^(0|[1-9][0-9]{0,4})$ ]]; then
+            echo "::error::max_requests must be a number of model requests (0: no cap), not '$MAX_REQUESTS'"
+            exit 1
+          fi
+          if ! [[ "$MAX_TASKS" =~ ^(0|[1-9][0-9]{0,2})$ ]]; then
+            echo "::error::max_tasks must be a number of subagent tasks (0: no cap), not '$MAX_TASKS'"
             exit 1
           fi
           if ! [[ "$HOMEGIT" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -479,6 +500,8 @@ jobs:
           CORES: ${{ inputs.cores }}
           TIMEOUT_MINUTES: ${{ inputs.timeout }}
           BUDGET: ${{ inputs.budget }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+          MAX_TASKS: ${{ inputs.max_tasks }}
           WORKFLOW: ${{ inputs.workflow }}
           BRIEF: ${{ inputs.brief }}
           OUT: ${{ runner.temp }}/agent
@@ -556,7 +579,10 @@ jobs:
   safe_outputs:
     name: Safe outputs
     needs: [restrictions, agent]
-    if: ${{ !cancelled() && needs.agent.result == 'success' }}
+    # Also for an agent job that failed but handed something back: a run
+    # stopped at a limit ends as timeout or budget, and its partial change
+    # is checked like any other.
+    if: ${{ !cancelled() && (needs.agent.result == 'success' || needs.agent.outputs.handed_back == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

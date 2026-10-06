@@ -14,6 +14,9 @@ import { BASE_FILE, OUTPUTS_FILE, patchFileName } from "../safe-outputs/safe-out
 
 export const CREATE_PULL_REQUEST = "create_pull_request";
 const MAX_TITLE = 100;
+// bot-harness results that mean it stopped the session at a limit.
+const STOPPED_RESULTS = ["timeout", "budget"];
+const MAX_REASON = 200;
 const MAX_LINES = 1000;
 const COMMIT_IDENTITY = ["-c", "user.name=agent", "-c", "user.email=agent@localhost", "-c", "commit.gpgsign=false"];
 
@@ -22,12 +25,26 @@ export const runBranch = (runId) => `agent-run-${runId}`;
 
 const oneLine = (s) => s.replace(/\s+/g, " ").trim();
 
+// OUTCOME (the agent's outcome.json) with stopped_early set when
+// bot-harness stopped the session at a limit and the agent didn't say so
+// itself: a run cancelled mid-turn wrote none, and its working tree is
+// still collected. HARNESS is harness.json's {result, message}.
+export function markStoppedEarly(outcome, harness) {
+  if (!STOPPED_RESULTS.includes(harness?.result) || outcome.stopped_early) return outcome;
+  const why = typeof harness.message === "string" && harness.message ? harness.message : harness.result;
+  return { ...outcome, stopped_early: `the run was stopped at a limit: ${oneLine(why).slice(0, MAX_REASON)}` };
+}
+
 // The create_pull_request request for a change the agent didn't request
-// itself, from its outcome.json.
+// itself, from its outcome.json. One of a run that stopped early says so:
+// the change is a partial one to continue.
 export function defaultPullRequest(outcome, runId) {
   const summary = typeof outcome?.summary === "string" ? outcome.summary.trim() : "";
   const title = oneLine(summary.split("\n")[0] ?? "").slice(0, MAX_TITLE) || `Agent run ${runId}`;
-  return { type: CREATE_PULL_REQUEST, title, body: summary || `Changes from agent run ${runId}.` };
+  const early = outcome?.stopped_early;
+  const why = typeof early === "string" && early.trim() ? ` (${oneLine(early).slice(0, MAX_REASON)})` : "";
+  const partial = early ? `\n\nPartial change: the run stopped early${why}.` : "";
+  return { type: CREATE_PULL_REQUEST, title, body: `${summary || `Changes from agent run ${runId}.`}${partial}` };
 }
 
 // The outputs.jsonl to upload: the agent's lines (those that aren't JSON
