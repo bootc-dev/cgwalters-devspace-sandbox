@@ -1,10 +1,12 @@
 //! bot-harness: run one task with any agent that speaks the Agent Client
 //! Protocol (https://agentclientprotocol.com), recording the protocol
 //! stream as the transcript, answering permission requests from a policy,
-//! and enforcing a timeout and budget. `summary` then turns a recorded run
-//! into summary.json for bot-runs.
+//! and enforcing a timeout and budget, of which it warns the agent in time
+//! to hand back (`budget`). `summary` then turns a recorded run into
+//! summary.json for bot-runs.
 
 mod agents;
+mod budget;
 mod digest;
 mod policy;
 mod run;
@@ -34,6 +36,11 @@ enum Command {
     /// and prints the condensed transcript. Exits 0 on success, 124 on
     /// timeout, 3 over budget, 1 when the agent failed and 2 when the
     /// harness did.
+    ///
+    /// The agent is told as the run nears its timeout or --max-requests
+    /// (at 60 and 80 percent), and near it, or past --max-tasks, its turn
+    /// is cancelled and it gets one more to hand back; the limit ends the
+    /// session whatever it is doing.
     Run(RunArgs),
     /// Print summary.json (agent-run-summary/v1) for a run recorded in DIR,
     /// and optionally write its Markdown step summary.
@@ -72,6 +79,17 @@ struct RunArgs {
     /// Most tool calls the agent may make.
     #[arg(long)]
     max_tool_calls: Option<usize>,
+    /// Most model requests the run may make, as counted in --requests-file.
+    #[arg(long, requires = "requests_file", value_parser = clap::value_parser!(u64).range(1..))]
+    max_requests: Option<u64>,
+    /// A file the caller keeps the run's count of model requests in, a
+    /// decimal number (ACP doesn't report them): whoever serves the
+    /// inference counts them, subagents' included.
+    #[arg(long)]
+    requests_file: Option<PathBuf>,
+    /// Most subagent tasks the agent may start.
+    #[arg(long, value_parser = at_least_one)]
+    max_tasks: Option<usize>,
     /// A command that runs the agent's argv elsewhere (for example as
     /// another user), such as `sudo run0 ... --`.
     ///
@@ -106,6 +124,13 @@ struct SummaryArgs {
     /// Also write the summary as Markdown here, for the job's step summary.
     #[arg(long)]
     markdown: Option<PathBuf>,
+}
+
+fn at_least_one(s: &str) -> Result<usize, String> {
+    match s.parse() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(format!("'{s}' is not a number above 0")),
+    }
 }
 
 /// "90m", "2h", "300s" or "300" (seconds).
@@ -166,7 +191,10 @@ async fn cmd_run(a: RunArgs) -> Result<ExitCode> {
             timeout_s: a.timeout,
             budget_aic: a.budget_aic,
             max_tool_calls: a.max_tool_calls,
+            max_requests: a.max_requests,
+            max_tasks: a.max_tasks,
         },
+        requests_file: a.requests_file,
         wrapper: a.wrapper,
     })
     .await?;

@@ -264,6 +264,17 @@ pub fn summarize(i: &Inputs) -> Value {
     s.insert("acp_protocol".into(), json!(d.protocol_version));
     s.insert("agent_version".into(), json!(d.agent));
     s.insert("stop_reason".into(), json!(d.stop_reason));
+    // The run's limits: whether one stopped it before the task was done,
+    // whether the agent then handed back (so its change is a partial one
+    // to continue, not a failure), and what it was told on the way.
+    let stopped_early = matches!(result, Outcome::Timeout | Outcome::Budget);
+    s.insert("stopped_early".into(), json!(stopped_early));
+    s.insert(
+        "handed_back".into(),
+        json!(i.result.is_some_and(|r| r.handed_back)),
+    );
+    s.insert("notices".into(), json!(d.notices));
+    s.insert("limits".into(), json!(i.result.map(|r| &r.limits)));
     let denied: Vec<Value> = d
         .denied
         .iter()
@@ -353,6 +364,14 @@ pub fn markdown(s: &Value) -> String {
             ),
         ]),
     ];
+    if s["stopped_early"] == true {
+        let handed_back = if s["handed_back"] == true {
+            "the agent handed back, so its change is a partial one to continue"
+        } else {
+            "the agent didn't hand back, so its change is whatever the working tree held"
+        };
+        out.extend([String::new(), format!("Stopped at a limit: {handed_back}.")]);
+    }
     let p = &s["praxis"];
     if p.is_object() {
         out.extend([
@@ -779,6 +798,9 @@ Redacted 1 string(s).
             assert_eq!(s["result"], c.result, "{dir}: {s:#}");
             assert_eq!(s["stop_reason"], c.stop_reason, "{dir}");
             assert_eq!(s["acp_protocol"], 1, "{dir}");
+            // Stopped at a limit before the harness asked for a hand-back.
+            assert_eq!(s["stopped_early"], c.failure.is_some(), "{dir}");
+            assert_eq!(s["handed_back"], false, "{dir}");
             let tools: Vec<_> = s["tools"]
                 .as_object()
                 .unwrap()

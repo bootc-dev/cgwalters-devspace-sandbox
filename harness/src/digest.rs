@@ -13,6 +13,16 @@ use crate::policy::{self, PATH_KEYS};
 pub const MAX_TEXT: usize = 200;
 /// Tool kinds whose calls the log shows as edits.
 const EDIT_KINDS: &[&str] = &["edit", "delete", "move"];
+/// The tools that start a subagent, lowercase: opencode's `task`, and
+/// Claude Code's `Task`, since renamed `Agent`.
+const TASK_TOOLS: &[&str] = &["task", "agent"];
+/// The kinds both report one as; a shell command that happens to be
+/// titled "task" is not one.
+const TASK_KINDS: &[&str] = &["think", "other", ""];
+/// How the digest files a notice the harness queued behind the agent's
+/// turn, as opposed to a prompt that starts one: its response says
+/// nothing about the run.
+const NOTICE_METHOD: &str = "session/prompt (notice)";
 
 /// Which way a message went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -78,6 +88,10 @@ pub struct Digest {
     pub cost_usd: Option<f64>,
     pub allowed: u64,
     pub denied: Vec<Denial>,
+    /// The subagent tasks the agent started (TASK_TOOLS).
+    pub tasks: usize,
+    /// The labels of the budget notices the harness sent, in order.
+    pub notices: Vec<String>,
 }
 
 /// On one line (so nothing an agent writes can start a line of the job
@@ -267,6 +281,11 @@ impl Digest {
                         self.flush_text(&mut out);
                         out.push("⚠ cancelling the session".to_owned());
                     }
+                    "session/prompt" => {
+                        if let Some(label) = notice_label(&msg["params"]) {
+                            self.notice(label, &msg["params"], id, &mut out);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -306,7 +325,33 @@ impl Digest {
         out
     }
 
+    /// A budget notice the harness sent: the hand-back starts a turn of
+    /// its own, the others are queued behind the one that is running.
+    fn notice(&mut self, label: &str, params: &Value, id: Option<&Value>, out: &mut Vec<String>) {
+        self.flush_text(out);
+        let text = params["prompt"][0]["text"].as_str().unwrap_or_default();
+        let text = text
+            .strip_prefix(crate::budget::NOTICE_PREFIX)
+            .unwrap_or(text);
+        out.push(cut(&format!("⚠ notice to the agent: {}", text.trim())));
+        self.notices.push(label.to_owned());
+        if let Some(id) = id
+            && label != crate::budget::LABEL_HAND_BACK
+        {
+            self.sent.insert(id_key(id), NOTICE_METHOD.to_owned());
+        }
+    }
+
     fn response(&mut self, method: &str, msg: &Value, out: &mut Vec<String>) {
+        if method == NOTICE_METHOD {
+            // An agent that takes no prompt during a turn went without
+            // the notice; the run is none the worse for it.
+            if let Some(e) = msg.get("error") {
+                let text = e["message"].as_str().unwrap_or("unknown error");
+                out.push(cut(&format!("⚠ the agent refused a notice: {text}")));
+            }
+            return;
+        }
         if let Some(e) = msg.get("error") {
             let text = e["message"].as_str().unwrap_or("unknown error");
             let line = cut(&format!("{method} failed: {text}"));
@@ -371,11 +416,19 @@ impl Digest {
             "tool_call" => {
                 let id = update["toolCallId"].as_str().unwrap_or_default().to_owned();
                 // A repeated tool_call updates the one already seen.
+                let new = !self.index.contains_key(&id);
                 let i = *self.index.entry(id.clone()).or_insert_with(|| {
                     self.calls.push(ToolCall::new(id, ts));
                     self.calls.len() - 1
                 });
                 self.calls[i].merge(update);
+                let call = &self.calls[i];
+                if new
+                    && TASK_TOOLS.contains(&call.display_name().to_ascii_lowercase().as_str())
+                    && TASK_KINDS.contains(&call.kind.as_str())
+                {
+                    self.tasks += 1;
+                }
                 self.tool_status(i, ts, update, out);
             }
             "tool_call_update" => {
@@ -519,6 +572,12 @@ impl MessageLine {
             }
         }
     }
+}
+
+/// The label of a budget notice, for a `session/prompt` the harness sent
+/// as one (`run` marks them in `_meta`).
+fn notice_label(params: &Value) -> Option<&str> {
+    params["_meta"][policy::META_KEY]["notice"].as_str()
 }
 
 /// The model a session runs: its `model` config option (stable ACP), else
@@ -783,6 +842,74 @@ mod tests {
             m.push(&long);
         }
         assert_eq!((m.line.as_str(), m.done), ("first", true));
+    }
+
+    #[test]
+    fn notices_and_tasks() {
+        let notice = |id: u64, label: &str, text: &str| {
+            (
+                Dir::Send,
+                json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt", "params": {
+                    "sessionId": "s", "prompt": [{"type": "text", "text": text}],
+                    "_meta": {"botHarness": {"notice": label}}}}),
+            )
+        };
+        let task = |id: &str, fields: Value| {
+            let mut u =
+                json!({"sessionUpdate": "tool_call", "toolCallId": id, "status": "pending"});
+            u.as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            update(u)
+        };
+        let end = |id: u64, result: Value| {
+            (
+                Dir::Recv,
+                json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            )
+        };
+        let (d, out) = lines(&[
+            (
+                Dir::Send,
+                json!({"jsonrpc": "2.0", "id": 0, "method": "session/prompt", "params": {}}),
+            ),
+            task("t1", json!({"title": "task", "kind": "think"})),
+            // Repeated, it is the same task.
+            task("t1", json!({"title": "Review the change", "kind": "other"})),
+            task(
+                "t2",
+                json!({"title": "x", "_meta": {"claudeCode": {"toolName": "Agent"}}}),
+            ),
+            task("t3", json!({"title": "bash", "kind": "execute"})),
+            // A command, whatever it is called.
+            task("t4", json!({"title": "task", "kind": "execute"})),
+            notice(1, "60%", "[bot-harness budget notice] Converge.\nmore"),
+            notice(2, "80%", "[bot-harness budget notice] Finish."),
+            // A queued notice's answer isn't the run's, refused or not.
+            (
+                Dir::Recv,
+                json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "busy"}}),
+            ),
+            end(2, json!({"stopReason": "end_turn"})),
+            end(0, json!({"stopReason": "cancelled"})),
+            notice(3, "hand back", "[bot-harness budget notice] Hand back now."),
+            end(3, json!({"stopReason": "end_turn"})),
+        ]);
+        assert_eq!(
+            out,
+            [
+                "⚠ notice to the agent: Converge. more",
+                "⚠ notice to the agent: Finish.",
+                "⚠ the agent refused a notice: busy",
+                "done: cancelled, 4 tool calls",
+                "⚠ notice to the agent: Hand back now.",
+                "done: end_turn, 4 tool calls",
+            ]
+        );
+        assert_eq!(d.tasks, 2);
+        assert_eq!(d.notices, ["60%", "80%", "hand back"]);
+        assert_eq!(d.error, None);
+        assert_eq!(d.stop_reason.as_deref(), Some("end_turn"));
     }
 
     #[test]

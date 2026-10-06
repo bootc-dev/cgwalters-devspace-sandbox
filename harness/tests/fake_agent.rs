@@ -314,3 +314,165 @@ fn timeout_before_the_session() {
     assert_result(&r, 124, "timeout");
     assert!(r.elapsed < Duration::from_secs(10), "took {:?}", r.elapsed);
 }
+
+/// The labels of the budget notices the harness sent, in order.
+fn notices(r: &Run) -> Vec<&str> {
+    r.records
+        .iter()
+        .filter(|x| x["dir"] == "send" && x["msg"]["method"] == "session/prompt")
+        .filter_map(|x| x["msg"]["params"]["_meta"]["botHarness"]["notice"].as_str())
+        .collect()
+}
+
+/// The count of model requests the harness reads, as the caller of a real
+/// run keeps it: here the agent's own script writes it.
+const REQUESTS: &[&str] = &["--max-requests", "100", "--requests-file", "{dir}/requests"];
+const USE_REQUESTS: &str = r#"{"execute": {"title": "Bash", "command": "echo N > ../requests"}}"#;
+
+fn use_requests(n: u64) -> String {
+    USE_REQUESTS.replace('N', &n.to_string())
+}
+
+#[test]
+fn notices_as_the_budget_goes() {
+    let script = format!(
+        r#"[{}, {{"sleep": 2}}, {}, {{"sleep": 2}}, {{"say": "Done."}}]"#,
+        use_requests(60),
+        use_requests(85)
+    );
+    let r = run(
+        &["script", "{dir}/script.json"],
+        &[("script.json", &script)],
+        &[&["--timeout", "60s"][..], REQUESTS].concat(),
+    );
+    assert_result(&r, 0, "success");
+    assert_eq!(notices(&r), ["60%", "80%"]);
+    let told =
+        "⚠ notice to the agent: This run has used 60% of its budget (60 of 100 model requests).";
+    assert!(r.stdout.contains(told), "{}", r.stdout);
+    // The notices' own answers don't end the run early.
+    assert!(r.stdout.contains("» Done."), "{}", r.stdout);
+    let s = summary(&r);
+    assert_eq!(s["notices"], json!(["60%", "80%"]));
+    assert_eq!(s["stopped_early"], false);
+    assert_eq!(s["limits"]["max_requests"], 100);
+}
+
+/// A turn the harness interrupts near a limit, and what the agent does in
+/// the turn it then gets to hand back in.
+#[test]
+fn hand_back_near_a_limit() {
+    const HAND_BACK: &str = r#"[
+      {"write": {"title": "Write", "path": "{cwd}/partial.txt", "content": "partial\n"}},
+      {"say": "Handed back."}
+    ]"#;
+    struct Case {
+        name: &'static str,
+        script: String,
+        later: &'static str,
+        args: Vec<&'static str>,
+        status: i32,
+        result: &'static str,
+        message: &'static str,
+        notices: &'static [&'static str],
+        handed_back: bool,
+    }
+    let over_requests = format!(
+        r#"[{}, {{"sleep": 60}}, {{"say": "Not reached."}}]"#,
+        use_requests(95)
+    );
+    let task = r#"{"task": "Review the change"}"#;
+    let cases = [
+        Case {
+            name: "model requests",
+            script: over_requests.clone(),
+            later: HAND_BACK,
+            args: [&["--timeout", "60s"][..], REQUESTS].concat(),
+            status: 3,
+            result: "budget",
+            message: "used 95 of 100 model requests; the agent handed back",
+            notices: &["hand back"],
+            handed_back: true,
+        },
+        Case {
+            name: "an agent that goes on working is stopped at the end of its hand-back",
+            script: over_requests,
+            later: r#"[{"sleep": 60}, {"say": "Not reached."}]"#,
+            // A second to hand back in.
+            args: [&["--timeout", "20s"][..], REQUESTS].concat(),
+            status: 3,
+            result: "budget",
+            message: "used 95 of 100 model requests; cancelled",
+            notices: &["hand back"],
+            handed_back: false,
+        },
+        Case {
+            name: "subagent tasks",
+            script: format!(
+                r#"[{task}, {task}, {{"sleep": 1}}, {task}, {{"sleep": 60}}, {{"say": "Not reached."}}]"#
+            ),
+            later: HAND_BACK,
+            args: vec!["--timeout", "60s", "--max-tasks", "2"],
+            status: 3,
+            result: "budget",
+            message: "started more than 2 subagent tasks; the agent handed back",
+            notices: &["last task", "hand back"],
+            handed_back: true,
+        },
+        Case {
+            name: "the timeout",
+            script: r#"[{"sleep": 60}, {"say": "Not reached."}]"#.to_owned(),
+            later: HAND_BACK,
+            // A second to hand back in.
+            args: vec!["--timeout", "20s"],
+            status: 124,
+            result: "timeout",
+            message: "hit the timeout; the agent handed back",
+            notices: &["60%", "80%", "hand back"],
+            handed_back: true,
+        },
+    ];
+    for c in cases {
+        let name = c.name;
+        let r = run(
+            &["script", "{dir}/script.json", "{dir}/later.json"],
+            &[("script.json", &c.script), ("later.json", c.later)],
+            &c.args,
+        );
+        assert_result(&r, c.status, c.result);
+        assert_eq!(r.result["message"], c.message, "{name}");
+        assert_eq!(r.result["handed_back"], c.handed_back, "{name}");
+        assert_eq!(notices(&r), c.notices, "{name}");
+        assert!(!r.stdout.contains("Not reached"), "{name}: {}", r.stdout);
+        // Well before the sleeps end, and the timeout where it isn't the limit.
+        assert!(
+            r.elapsed < Duration::from_secs(30),
+            "{name}: took {:?}",
+            r.elapsed
+        );
+        // What the agent wrote while handing back is there to collect.
+        assert_eq!(r.path("work/partial.txt").exists(), c.handed_back, "{name}");
+        assert_eq!(
+            r.stdout.contains("» Handed back."),
+            c.handed_back,
+            "{name}: {}",
+            r.stdout
+        );
+        // The turn was cancelled before the agent was asked to hand back.
+        let position = |pred: &dyn Fn(&Value) -> bool| r.records.iter().position(pred).unwrap();
+        let cancel = position(&|x| x["msg"]["method"] == "session/cancel");
+        let asked =
+            position(&|x| x["msg"]["params"]["_meta"]["botHarness"]["notice"] == "hand back");
+        assert!(cancel < asked, "{name}");
+        let s = summary(&r);
+        assert_eq!(s["result"], c.result, "{name}");
+        assert_eq!(s["stopped_early"], true, "{name}");
+        assert_eq!(s["handed_back"], c.handed_back, "{name}");
+        assert_eq!(s["notices"], json!(c.notices), "{name}");
+        assert_eq!(
+            s["failures"].as_array().unwrap().last().unwrap()["message"],
+            c.message,
+            "{name}"
+        );
+    }
+}
