@@ -2,17 +2,30 @@
   "repos": ["bootc-dev/*", "composefs/*", "ostreedev/*", "containers/*", "cgwalters-bot/*", "cgwalters-forge/*"],
   "bases": ["main", "master", "bot/**"],
   "outputs": {
-    "create_pull_request": { "max": 1 },
-    "add_comment": { "max": 3 },
-    "noop": { "max": 1 },
-    "missing_tool": { "max": 3 },
-    "missing_data": { "max": 3 }
+    "create_pull_request": {
+      "max": 1
+    },
+    "add_comment": {
+      "max": 3
+    },
+    "noop": {
+      "max": 1
+    },
+    "missing_tool": {
+      "max": 3
+    },
+    "missing_data": {
+      "max": 3
+    }
   },
   "unprotected_files": {
-    "repos": ["cgwalters-bot/homegit", "cgwalters-forge/cgwalters-devspace-sandbox", "cgwalters-forge/review"],
+    "repos": ["cgwalters-bot/homegit", "cgwalters-forge/cgwalters-devspace-sandbox", "cgwalters-forge/review", "cgwalters-forge/agentic-job", "cgwalters-forge/agent-board"],
     "files": ["README.md", "AGENTS.md"]
   },
   "max_outputs": 5,
   "max_patch_bytes": 8388608,
-  "max_patch_files": 100
+  "max_patch_files": 100,
+  "workflow_edits": {
+    "repos": ["cgwalters-forge/agentic-job", "cgwalters-forge/agent-board"]
+  }
 }

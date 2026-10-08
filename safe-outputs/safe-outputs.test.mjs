@@ -62,15 +62,20 @@ const POLICY = compilePolicy(INPUTS).policy;
 // The bot's own repository, where README.md and AGENTS.md may change.
 const OWN_REPO = "cgwalters-bot/homegit";
 const OWN_POLICY = compilePolicy({ ...INPUTS, repo: OWN_REPO }).policy;
+// One of the forge's own new projects, where workflows may change too.
+const WORKFLOW_REPO = "cgwalters-forge/agentic-job";
+const WORKFLOW_POLICY = compilePolicy({ ...INPUTS, repo: WORKFLOW_REPO }).policy;
 
 test("compilePolicy: docs are unprotected only in the bot's own repositories", () => {
   const protectedIn = (repo) => compilePolicy({ ...INPUTS, repo }).policy.safe_outputs.create_pull_request;
   const defaults = JSON.parse(readFileSync(join(VENDOR, "protected-files.json"), "utf8"));
-  for (const [repo, own] of [
+  for (const [repo, own, workflows = false] of [
     [OWN_REPO, true],
     ["CGWalters-Bot/Homegit", true],
     ["cgwalters-forge/cgwalters-devspace-sandbox", true],
     ["cgwalters-forge/review", true],
+    [WORKFLOW_REPO, true, true],
+    ["cgwalters-forge/Agent-Board", true, true],
     [REPO, false],
     ["bootc-dev/cgwalters-devspace-sandbox", false],
     ["cgwalters-bot/bootc", false],
@@ -79,7 +84,32 @@ test("compilePolicy: docs are unprotected only in the bot's own repositories", (
     const config = protectedIn(repo);
     assert.deepEqual(defaults.protected_files.filter((f) => !config.protected_files.includes(f)), own ? ["README.md", "AGENTS.md"] : [], repo);
     assert.equal(config.protected_files_policy, "blocked", repo);
-    assert.equal(config.protect_top_level_dot_folders, true, repo);
+    assert.equal(config.protect_top_level_dot_folders, !workflows, repo);
+  }
+});
+
+test("workflow edits: .github/ and .gitignore may change only where the allowlist says, and git's other files nowhere", async () => {
+  for (const [name, files, workflowRepo, ownRepo] of [
+    ["a workflow", { ".github/workflows/x.yml": "on: push\n" }, null, /\.github/],
+    ["a .gitignore", { ".gitignore": "/target/\n" }, null, /protected path/],
+    ["a nested .gitignore", { "crates/x/.gitignore": "/out/\n" }, null, /protected path/],
+    ["a nested .github", { "sub/.github/workflows/x.yml": "on: push\n" }, /protected path/, /protected path/],
+    ["git attributes", { ".gitattributes": "* -diff\n" }, /protected path/, /protected path/],
+    ["git modules", { ".gitmodules": "[submodule \"x\"]\n" }, /protected path/, /protected path/],
+    ["another dot-folder", { ".vscode/settings.json": "{}\n" }, /protected path/, /protected path/],
+    ["direnv", { ".envrc": "export X=1\n" }, /protected path/, /protected path/],
+    ["a secret in a workflow", { ".github/workflows/x.yml": `${"ghp_"}${"a1B2".repeat(10)}\n` }, /secret-shaped/, /\.github|secret-shaped/],
+  ]) {
+    const { patch, base } = patchOf(edit(files));
+    for (const [repo, policy, want] of [[WORKFLOW_REPO, WORKFLOW_POLICY, workflowRepo], [OWN_REPO, OWN_POLICY, ownRepo]]) {
+      const where = `${name} in ${repo}`;
+      const verdict = await checkOutputs(handback({ lines: [PR], patch, base, baseJson: { repo, ref: BASE, commit: base } }), policy);
+      const applied = postApplyProblems(gitView(staged(edit(files))), policy);
+      for (const errors of [verdict.errors, applied]) {
+        if (want === null) assert.deepEqual(errors, [], where);
+        else assert.match(errors.join("\n"), want, where);
+      }
+    }
   }
 });
 

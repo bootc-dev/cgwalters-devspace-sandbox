@@ -93,11 +93,19 @@ function globMatches(patterns, value) {
 // gh-aw matches them: editing them is routine work there. Only names leave
 // the list, so manifests, CODEOWNERS, top-level dot-folders (.github/) and
 // everything PROTECTED_PATH_RE names stay protected everywhere.
+//
+// The repositories named in the allowlist's workflow_edits are the forge's
+// own new projects, where the workflows are the product: a run there may
+// also change .github/ and .gitignore (gh-aw's own switch for this is
+// protect_top_level_dot_folders). The change still goes through every other
+// check here, and through review, before it merges.
 function protectedFiles(repo, allowlist) {
   const defaults = readJson(join(VENDOR, "protected-files.json"));
+  const named = (list) => (list ?? []).some((r) => r.toLowerCase() === repo.toLowerCase());
   const { repos = [], files = [] } = allowlist.unprotected_files ?? {};
-  if (!repos.some((r) => r.toLowerCase() === repo.toLowerCase())) return defaults;
-  return { ...defaults, protected_files: defaults.protected_files.filter((f) => !files.includes(f)) };
+  if (!named(repos)) return defaults;
+  const policy = { ...defaults, protected_files: defaults.protected_files.filter((f) => !files.includes(f)) };
+  return named(allowlist.workflow_edits?.repos) ? { ...policy, protect_top_level_dot_folders: false } : policy;
 }
 
 // The policy of a run: its dispatch inputs checked against the static
@@ -192,9 +200,13 @@ export async function ingest(text, policy) {
 export const patchFileName = (branch) => `aw-${branch.replace(/[/\\:*?"<>|]/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, "").toLowerCase()}.patch`;
 
 // Why a path may not be in a change; undefined when it may.
-function pathProblem(path) {
+// With workflow edits allowed (see protectedFiles), .github/ at the top and
+// .gitignore at any depth are ordinary paths; git's other files are not.
+const WORKFLOW_EDIT_RE = /^\.github\/|(^|\/)\.gitignore$/;
+function pathProblem(path, policy) {
   if (!PLAIN_PATH_RE.test(path) || /(^|\/)\.\.?(\/|$)/.test(path)) return "not a plain relative path";
-  if (PROTECTED_PATH_RE.test(path)) return "protected path";
+  const workflowEdits = policy?.safe_outputs?.create_pull_request?.protect_top_level_dot_folders === false;
+  if (PROTECTED_PATH_RE.test(path) && !(workflowEdits && WORKFLOW_EDIT_RE.test(path))) return "protected path";
   return undefined;
 }
 
@@ -215,7 +227,7 @@ export function patchProblems(patch, policy, baseCommit) {
     }
     for (const path of [entry.oldPath, entry.newPath].filter((p) => p && p !== "dev/null")) {
       files.add(path);
-      const why = pathProblem(path);
+      const why = pathProblem(path, policy);
       if (why) problems.push(`${JSON.stringify(path)}: ${why}`);
     }
   }
@@ -433,7 +445,7 @@ export function postApplyProblems({ raw, numstat, diff }, policy) {
     const [oldMode, newMode, , , status] = entries[i].slice(1).split(" ");
     const path = entries[i + 1];
     files.push(path);
-    const why = pathProblem(path)
+    const why = pathProblem(path, policy)
       ?? (/^1[26]0000$/.test(oldMode) || /^1[26]0000$/.test(newMode) ? "symlink or submodule" : undefined)
       ?? (status === "A" && newMode !== PLAIN_MODE ? `new file mode ${newMode}` : undefined)
       ?? (status === "M" && oldMode !== newMode ? `mode change ${oldMode} to ${newMode}` : undefined)
