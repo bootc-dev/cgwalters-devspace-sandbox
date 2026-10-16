@@ -71,6 +71,29 @@ which Renovate keeps current via the shared bootc-dev configuration. The
 GitHub CLI, which the bot's tools call for every GitHub operation, comes from
 EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
 
+## Agent runs
+
+`.github/workflows/agent.yml` runs an unattended
+[agentic-job](https://github.com/cgwalters-forge/agentic-job) agent on the same
+RHEL 10 runners, through the shared
+`cgwalters-forge/actions` wrapper (`cgwalters-agentic-job.yml`):
+
+```console
+gh workflow run agent.yml --ref main -f repo=bootc-dev/bootc -f item=1234 \
+  -f kind=research -f pool=claude -f cores=16 -f task='...'
+```
+
+The repositories a run may target are in `.github/agentic-job/dispatch.toml`,
+the agent pools in `pools.json` there, and the runner configuration (the
+services stopped, the packages installed for VM work) in `rhel10.toml`.
+`-f agent=fake` runs the scripted agent instead, with no inference or tailnet,
+and `-f config=rhel10-kvm-smoke` additionally boots a VM as the sandbox user
+with `qemu:///session` and passt during setup, a shakedown of the runner.
+
+A real agent's results are applied with the token of the `agent-apply`
+environment's `SAFE_OUTPUTS_PAT` secret, which an administrator must create,
+and its inference broker must admit this repository's runs.
+
 ## TODO / roadmap
 
 - Later, support launching an agent that can work autonomously and push changes

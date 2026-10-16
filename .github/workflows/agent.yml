@@ -1,0 +1,139 @@
+# An agentic-job agent run on this repository's RHEL 10 larger runners.
+# The run itself is cgwalters-forge/actions' cgwalters-agentic-job.yml (the
+# agentic-job pin, the tailnet join, the inference proxy); this file keeps
+# what is ours: the trigger, the bounds in .github/agentic-job (dispatch.toml,
+# fix.toml) and the RHEL runner configuration there, rhel10.toml. Modelled on
+# cgwalters-forge/tracker's dispatch.yml.
+#
+# `pool` picks the agent, model and budget from .github/agentic-job/pools.json;
+# `agent: fake` instead runs agentic-job's scripted agent, with no inference
+# and no tailnet, to shake down the runner's setup. `cores` maps to a label
+# through runner-sizes.json, as for devspace.yml.
+name: agent
+run-name: "${{ inputs.kind }} ${{ inputs.repo }}#${{ inputs.item }} (${{ inputs.agent == 'fake' && 'fake' || inputs.pool }}, ${{ inputs.cores }}c${{ inputs.config != 'rhel10' && format(', {0}', inputs.config) || '' }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Public task for the agent
+        type: string
+        required: true
+      repo:
+        description: Public target repository, OWNER/NAME, allowed by .github/agentic-job/dispatch.toml
+        type: string
+        default: bootc-dev/bootc
+        required: true
+      item:
+        description: Positive issue number in the target repository
+        type: string
+        required: true
+      kind:
+        description: Fixed profile
+        type: choice
+        options: [research, triage, implement]
+        default: research
+        required: true
+      pool:
+        description: "Inference pool (.github/agentic-job/pools.json)"
+        type: choice
+        options: [claude, openai, mistral]
+        default: claude
+        required: true
+      agent:
+        description: "pool for the pool's agent; fake for the scripted agent (no inference, no tailnet)"
+        type: choice
+        options: [pool, fake]
+        default: pool
+      cores:
+        description: Runner CPU cores (runner-sizes.json)
+        type: choice
+        options: ["4", "16", "64"]
+        default: "16"
+        required: true
+      config:
+        description: "Runner configuration: rhel10, or rhel10-kvm-smoke, which also boots a VM as the sandbox user during setup"
+        type: choice
+        options: [rhel10, rhel10-kvm-smoke]
+        default: rhel10
+
+permissions: {}
+concurrency:
+  group: agent-${{ inputs.kind }}-${{ inputs.repo }}-${{ inputs.item }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      agent: ${{ steps.resolve.outputs.agent }}
+      model: ${{ steps.resolve.outputs.model }}
+      budget: ${{ steps.resolve.outputs.budget }}
+      runner: ${{ steps.resolve.outputs.runner }}
+      config: ${{ steps.resolve.outputs.config }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/agentic-job/pools.json
+            runner-sizes.json
+          sparse-checkout-cone-mode: false
+      # Each input from a closed set, so that a dispatcher can name no
+      # other runner label or file of this repository as the configuration.
+      - name: Resolve the pool, the runner and the configuration
+        id: resolve
+        env:
+          POOL: ${{ inputs.pool }}
+          AGENT: ${{ inputs.agent }}
+          CORES: ${{ inputs.cores }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          pools=.github/agentic-job/pools.json
+          jq -e --arg pool "$POOL" 'has($pool)' "$pools" > /dev/null ||
+            { echo "::error::unknown pool '${POOL}'"; exit 1; }
+          if [[ "$AGENT" == fake ]]; then
+            printf 'agent=fake\nmodel=\nbudget=\n' >> "$GITHUB_OUTPUT"
+          elif [[ "$AGENT" == pool ]]; then
+            jq -r --arg pool "$POOL" '.[$pool] | "agent=\(.agent)\nmodel=\(.model)\nbudget=\(.budget)"' "$pools" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::unknown agent '${AGENT}'; expected pool or fake"; exit 1
+          fi
+          # The wrapper takes the runner label as JSON.
+          runner=$(jq -ce --arg cores "$CORES" '.[$cores] | strings' runner-sizes.json) ||
+            { echo "::error::no runner for ${CORES} cores in runner-sizes.json"; exit 1; }
+          echo "runner=${runner}" >> "$GITHUB_OUTPUT"
+          case "$CONFIG" in
+            rhel10|rhel10-kvm-smoke) echo "config=.github/agentic-job/${CONFIG}.toml" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unknown config '${CONFIG}'"; exit 1 ;;
+          esac
+
+  run:
+    needs: resolve
+    uses: cgwalters-forge/actions/.github/workflows/cgwalters-agentic-job.yml@main
+    # The most any job of the wrapper has: its agent job takes the reads and
+    # the identity token, its policy and apply calls the comment writes.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: read
+      id-token: write
+    with:
+      task: ${{ inputs.task }}
+      repo: ${{ inputs.repo }}
+      item: ${{ inputs.item }}
+      kind: ${{ inputs.kind }}
+      agent: ${{ needs.resolve.outputs.agent }}
+      model: ${{ needs.resolve.outputs.model }}
+      budget: ${{ needs.resolve.outputs.budget || '500' }}
+      runner: ${{ needs.resolve.outputs.runner }}
+      config: ${{ needs.resolve.outputs.config }}
+      apply-environment: agent-apply
+    # The bot's token, named and never inherited; the wrapper hands it to
+    # apply, in the environment above, and to the status comment.
+    secrets:
+      SAFE_OUTPUTS_PAT: ${{ secrets.SAFE_OUTPUTS_PAT }}
