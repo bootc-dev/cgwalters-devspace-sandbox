@@ -1,0 +1,8 @@
+{
+  "claude": { "agent": "claude", "model": "claude-opus-5-5", "budget": "3000" },
+  "openai": { "agent": "opencode", "model": "praxis/gpt-6.1-sol", "budget": "500" },
+  "mistral": {
+    "agent": "vibe", "model": "zai-glm-5-3", "budget": "1000",
+    "allowance": { "amount": 300, "currency": "USD", "period": "calendar-month" }
+  }
+}

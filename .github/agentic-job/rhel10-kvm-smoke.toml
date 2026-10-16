@@ -1,0 +1,61 @@
+# rhel10.toml, unchanged but for setup.script: kvm-smoke.sh boots a VM as
+# the sandbox user through qemu:///session with passt and ssh-es into it, a
+# shakedown of the RHEL 10 runner for bootc work. agent.yml's `config` input
+# selects it. Keep it in step with rhel10.toml.
+
+[sandbox]
+# Daemons of the image that listen for every local user and that an agent
+# run does not use. Each takes the socket that triggers it with it.
+stop-services = [
+    "sshd.service",
+    "sshd.socket",
+    # systemd-ssh-generator's AF_UNIX listener, /run/ssh-unix-local/socket.
+    "sshd-unix-local.socket",
+    "cockpit.service",
+    "sssd-kcm.service",
+    "sssd.service",
+    "libstoragemgmt.service",
+    "iscsid.service",
+    "iscsiuio.service",
+    "multipathd.service",
+    "setroubleshootd.service",
+]
+
+# The egress proxy and the network rules are on by default: no [egress].
+# The sandbox user is in the `kvm` group by default (sandbox.groups), which
+# is what qemu:///session with passt networking needs; not `libvirt`, whose
+# polkit rule grants all of qemu:///system.
+
+[setup]
+# What the RHEL 10 image lacks for a bootc agent run: a user-session libvirt
+# with passt networking for VMs (virt-install's --disk needs the storage
+# driver's virtstoraged, its --cloud-init xorriso; qemu-kvm-core, not the
+# qemu-kvm metapackage, which pulls in gcc and systemtap),
+# skopeo for images, and git and ssh to work with them. The egress proxy
+# runs in a Python environment of its own, behind nftables rules; RHEL's
+# python3 has the venv module.
+packages = [
+    "git",
+    "qemu-kvm-core",
+    "qemu-img",
+    "libvirt-daemon-driver-qemu",
+    "libvirt-daemon-driver-storage-core",
+    "libvirt-client",
+    "virt-install",
+    "passt",
+    "xorriso",
+    "skopeo",
+    "openssh-clients",
+    "nftables",
+    "python3",
+]
+script = ".github/agentic-job/kvm-smoke.sh"
+
+# Inert for ordinary runs; empty lists fail closed (tracker's hosted.toml).
+[session]
+operators = []
+origins = []
+
+[commit]
+author = "agentic-job <agentic-job@users.noreply.github.com>"
+trailers = ["Generated-by: AI"]

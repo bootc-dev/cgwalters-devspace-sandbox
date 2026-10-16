@@ -1,0 +1,63 @@
+# The runner configuration for agent.yml's runs on this repository's RHEL 10
+# larger runners (runner-sizes.json); agent.yml passes it to the wrapper as
+# `config`. Modelled on cgwalters-forge/tracker's hosted.toml, which is for
+# GitHub's ubuntu-26.04 image. `agentic-job sandbox check` fails on each
+# listener left for every local user and names it; agentic-job's
+# docs/sandbox-check.md lists the ones this image has.
+# rhel10-kvm-smoke.toml is this file plus a setup script: keep them in step.
+
+[sandbox]
+# Daemons of the image that listen for every local user and that an agent
+# run does not use. Each takes the socket that triggers it with it.
+stop-services = [
+    "sshd.service",
+    "sshd.socket",
+    # systemd-ssh-generator's AF_UNIX listener, /run/ssh-unix-local/socket.
+    "sshd-unix-local.socket",
+    "cockpit.service",
+    "sssd-kcm.service",
+    "sssd.service",
+    "libstoragemgmt.service",
+    "iscsid.service",
+    "iscsiuio.service",
+    "multipathd.service",
+    "setroubleshootd.service",
+]
+
+# The egress proxy and the network rules are on by default: no [egress].
+# The sandbox user is in the `kvm` group by default (sandbox.groups), which
+# is what qemu:///session with passt networking needs; not `libvirt`, whose
+# polkit rule grants all of qemu:///system.
+
+[setup]
+# What the RHEL 10 image lacks for a bootc agent run: a user-session libvirt
+# with passt networking for VMs (virt-install's --disk needs the storage
+# driver's virtstoraged, its --cloud-init xorriso; qemu-kvm-core, not the
+# qemu-kvm metapackage, which pulls in gcc and systemtap),
+# skopeo for images, and git and ssh to work with them. The egress proxy
+# runs in a Python environment of its own, behind nftables rules; RHEL's
+# python3 has the venv module.
+packages = [
+    "git",
+    "qemu-kvm-core",
+    "qemu-img",
+    "libvirt-daemon-driver-qemu",
+    "libvirt-daemon-driver-storage-core",
+    "libvirt-client",
+    "virt-install",
+    "passt",
+    "xorriso",
+    "skopeo",
+    "openssh-clients",
+    "nftables",
+    "python3",
+]
+
+# Inert for ordinary runs; empty lists fail closed (tracker's hosted.toml).
+[session]
+operators = []
+origins = []
+
+[commit]
+author = "agentic-job <agentic-job@users.noreply.github.com>"
+trailers = ["Generated-by: AI"]

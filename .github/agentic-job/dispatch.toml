@@ -1,0 +1,21 @@
+# Bounds for agent.yml: the repositories a dispatched run may target.
+# Exact names, no globs; add a repository here before dispatching to it.
+# No fix.toml: agent.yml offers no `fix` kind, the only one that reads it.
+hosts = ["github.com"]
+repos = ["bootc-dev/bootc", "bootc-dev/cgwalters-devspace-sandbox"]
+bases = ["main"]
+max_outputs = 3
+max_patch_bytes = 1048576
+max_patch_files = 50
+
+[outputs]
+# `ready_when_complete`: apply opens complete work ready for review, and only
+# a checkpoint or a run stopped at a limit as a draft (agentic-job's
+# docs/safe-outputs.md, "Ready or draft").
+create_pull_request = { max = 1, ready_when_complete = true }
+add_comment = { max = 1 }
+noop = { max = 1 }
+missing_tool = { max = 1 }
+missing_data = { max = 1 }
+
+# No [unprotected_files]: a run's pull request may not edit `.github/`.
