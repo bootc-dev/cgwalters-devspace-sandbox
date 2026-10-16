@@ -113,7 +113,7 @@ jobs:
 
   run:
     needs: resolve
-    uses: cgwalters-forge/actions/.github/workflows/cgwalters-agentic-job.yml@main
+    uses: ./.github/workflows/agentic-job-rhel-test.yml
     # The most any job of the wrapper has: its agent job takes the reads and
     # the identity token, its policy and apply calls the comment writes.
     permissions:
