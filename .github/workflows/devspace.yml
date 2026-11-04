@@ -49,6 +49,9 @@ jobs:
           sudo dnf install -y iptables openssh-server
           sudo ln -sfn /usr/local/bin/tailscale /usr/bin/tailscale
           sudo ln -sfn /usr/local/bin/tailscaled /usr/bin/tailscaled
+          # Cockpit listens on all addresses, so other devspaces on the
+          # tailnet could reach its login page; nothing here uses it.
+          sudo systemctl disable --now cockpit.socket 2>/dev/null || true
           sudo systemctl stop sshd.service
           if sudo systemctl cat sshd.socket >/dev/null 2>&1; then
             sudo systemctl stop sshd.socket
@@ -59,7 +62,7 @@ jobs:
           fi
 
       - name: Connect to the tailnet
-        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8
+        uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
@@ -75,7 +78,7 @@ jobs:
           id runner
 
       - name: Check out devspace configuration
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -90,11 +93,17 @@ jobs:
             sudo -u runner -H "$bindir/$tool" --version
           done
 
-      - name: Initialize runner configuration
+      - name: Install the development toolchain
         shell: bash
         run: |
           set -euo pipefail
-          sudo -u runner -H just init
+          sed -e 's/#.*//' packages.txt | xargs sudo dnf install -y
+
+      # SSH sessions run as this user, which has no sudo; see the script.
+      # It then installs the bot's dotfiles for it (just init).
+      - name: Create and initialize the unprivileged runner-sandbox user
+        shell: bash
+        run: sudo node scripts/setup-runner-sandbox.mjs --init Justfile
 
       - name: Prepare OpenSSH and keep the devspace available
         shell: bash
@@ -103,24 +112,32 @@ jobs:
           SSH_PUBLIC_KEY: ${{ inputs.ssh_public_key }}
         run: |
           set -euo pipefail
+          # The Tailscale login above was the one use of the OIDC request
+          # token. This step lives as long as the devspace, so rerun it
+          # without the token (and the runtime token, where present): its
+          # /proc/PID/environ would show them to anything running as runner.
+          scrub=(ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN)
+          for var in "${scrub[@]}"; do
+            if [[ -v "$var" ]]; then
+              exec env "${scrub[@]/#/--unset=}" bash --noprofile --norc -e -o pipefail "$0"
+            fi
+          done
           [[ -n "$SSH_PUBLIC_KEY" && "$SSH_PUBLIC_KEY" != *$'\n'* && "$SSH_PUBLIC_KEY" != *$'\r'* ]]
           [[ "$SSH_PUBLIC_KEY" =~ ^ssh-ed25519[[:space:]]+[A-Za-z0-9+/]+={0,2}([[:space:]][^[:cntrl:]]*)?$ ]]
           [[ "$(getenforce)" == Enforcing ]]
           duration_seconds=$((DURATION_MINUTES * 60))
           config=$(mktemp)
           key_input=$(mktemp)
-          authorized_key=/home/runner/.ssh/devspace-authorized_keys
+          # Root-owned, so the session can't add keys of its own.
+          authorized_key=/etc/ssh/devspace-authorized_keys
           cleanup() {
             rm -f "$config" "$key_input"
-            sudo rm -f "$authorized_key"
           }
           trap cleanup EXIT INT TERM
           printf '%s\n' "$SSH_PUBLIC_KEY" >"$key_input"
           sudo ssh-keygen -lf "$key_input" >/dev/null
-          sudo install -d -m 700 -o runner -g runner /home/runner/.ssh
-          sudo chmod 755 /home/runner
-          sudo install -m 600 -o runner -g runner "$key_input" "$authorized_key"
-          sudo restorecon -RF /home/runner/.ssh
+          sudo install -m 644 -o root -g root "$key_input" "$authorized_key"
+          sudo restorecon "$authorized_key"
           sudo ssh-keygen -A
           tailscale_ip=$(sudo tailscale ip -4)
           [[ "$tailscale_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
@@ -128,14 +145,14 @@ jobs:
           Port 22
           ListenAddress $tailscale_ip
           HostKey /etc/ssh/ssh_host_ed25519_key
-          AuthorizedKeysFile /home/runner/.ssh/devspace-authorized_keys
+          AuthorizedKeysFile /etc/ssh/devspace-authorized_keys
           AuthenticationMethods publickey
           PubkeyAuthentication yes
           PasswordAuthentication no
           KbdInteractiveAuthentication no
           PermitRootLogin no
           PermitEmptyPasswords no
-          AllowUsers runner
+          AllowUsers runner-sandbox
           PermitTTY yes
           AllowAgentForwarding no
           AllowTcpForwarding no
@@ -153,21 +170,21 @@ jobs:
           sudo systemctl restart sshd.service
           health_check() {
             local sshd_pid context
-            sudo systemctl is-active --quiet sshd.service
-            sshd_pid=$(sudo systemctl show -p MainPID --value sshd.service)
-            [[ -n "$sshd_pid" && "$sshd_pid" != 0 ]]
-            sudo kill -0 "$sshd_pid"
-            context=$(sudo ps -o label= --no-headers -p "$sshd_pid" | tr -d '[:space:]')
+            systemctl is-active --quiet sshd.service
+            sshd_pid=$(systemctl show -p MainPID --value sshd.service)
+            [[ -n "$sshd_pid" && "$sshd_pid" != 0 && -d "/proc/$sshd_pid" ]]
+            context=$(ps -o label= --no-headers -p "$sshd_pid" | tr -d '[:space:]')
             [[ "$context" == *:sshd_t:* ]]
-            sudo ss -H -ltn | awk -v endpoint="${tailscale_ip}:22" '$1 == "LISTEN" && $4 ~ /:22$/ { if ($4 != endpoint) bad=1; else found=1 } END { exit (!found || bad) }'
+            ss -H -ltn | awk -v endpoint="${tailscale_ip}:22" '$1 == "LISTEN" && $4 ~ /:22$/ { if ($4 != endpoint) bad=1; else found=1 } END { exit (!found || bad) }'
           }
           sleep 1
           health_check
-          printf 'OpenSSH is ready for runner@%s\n' "$(hostname --fqdn)"
+          printf 'OpenSSH is ready for runner-sandbox@%s\n' "$(hostname --fqdn)"
           printf 'Tailscale IPv4: %s\n' "$tailscale_ip"
           started=$(date +%s)
           while (( $(date +%s) - started < duration_seconds )); do
             health_check
+            # tailscaled's socket is root's only (setup-runner-sandbox.mjs).
             sudo tailscale status --self
             sleep 5
           done
