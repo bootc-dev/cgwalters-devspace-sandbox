@@ -8,7 +8,7 @@ max_outputs = 3
 max_patch_bytes = 1048576
 max_patch_files = 50
 
-[outputs]
+[github.outputs]
 # `ready_when_complete`: apply opens complete work ready for review, and only
 # a checkpoint or a run stopped at a limit as a draft (agentic-job's
 # docs/safe-outputs.md, "Ready or draft").
