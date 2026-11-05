@@ -1,0 +1,66 @@
+ 01:01:27 up 3 min,  1 user,  load average: 0.05, 0.05, 0.01
+TARGET SOURCE    FSTYPE OPTIONS
+/boot  systemd-1 autofs rw,relatime,fd=89,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=9709
+* default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.0
+    origin: <unknown origin type>
+unshare-status-rc=0
+deploy-rc=0
+  default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.1 (staged)
+    origin refspec: f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1
+* default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.0
+    origin: <unknown origin type>
+ 01:04:43 up 6 min,  1 user,  load average: 0.07, 0.08, 0.02
+TARGET  SOURCE           FSTYPE OPTIONS
+/boot   systemd-1        autofs rw,relatime,fd=89,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=9709
+`-/boot /dev/vda3[/boot] xfs    ro,relatime,seclabel,inode64,logbufs=8,logbsize=32k,noquota
+  default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.1 (staged)
+    origin refspec: f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1
+* default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.0
+    origin: <unknown origin type>
+unshare-status-rc=0
+active
+BOOT_IMAGE=(hd0,gpt3)/boot/ostree/default-1c4240f208a05a2899d0da03eafea9aafd1a8587df2cebb29adb7bfcf9a6e5da/vmlinuz-7.2.15-200.fc44.x86_64 root=UUID=3cc6f78f-3e14-4c51-bf6b-64adb5b21601 rw ostree=/ostree/boot.0/default/1c4240f208a05a2899d0da03eafea9aafd1a8587df2cebb29adb7bfcf9a6e5da/0 bz2402=fixed
+* default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.1
+    origin refspec: f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1
+  default f48362974513cec2b670ae4a032fcdc227838a4eab026c632688c947073216c1.0 (rollback)
+    origin: <unknown origin type>
+Nov 05 01:00:50.805204 fedora systemd[1]: Unmounting boot.mount - /boot...
+Nov 05 01:00:50.818975 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 01:00:50.819278 fedora systemd[1]: Unmounted boot.mount - /boot.
+Nov 05 01:01:27.508685 fedora systemd[1]: boot.automount: Got automount request for /boot, triggered by 2085 (ostree)
+Nov 05 01:01:27.510191 fedora systemd[1]: Mounting boot.mount - /boot...
+Nov 05 01:01:27.524139 fedora systemd[1]: Mounted boot.mount - /boot.
+Nov 05 01:01:27.547038 fedora systemd[1]: Starting ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment...
+Nov 05 01:01:27.555216 fedora systemd[1]: Started ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment.
+Nov 05 01:01:27.555695 fedora systemd[1]: Finished ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 01:04:43.308548 fedora systemd[1]: boot.automount: Deactivated successfully.
+Nov 05 01:04:43.308862 fedora systemd[1]: Unset automount boot.automount - EFI System Partition Automount.
+Nov 05 01:04:43.314282 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 01:04:43.440988 fedora systemd[1]: Stopping ostree-finalize-staged.service - OSTree Finalize Staged Deployment...
+Nov 05 01:04:43.517275 fedora ostree[2190]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:04:43.518834 fedora ostree[2190]: Finalizing staged deployment
+Nov 05 01:04:44.196328 fedora ostree[2190]: Copying /etc changes: 3 modified, 0 removed, 12 added
+Nov 05 01:04:44.196563 fedora ostree[2190]: Copying /etc changes: 3 modified, 0 removed, 12 added
+Nov 05 01:04:44.208891 fedora ostree[2190]: Refreshing SELinux policy
+Nov 05 01:04:45.498512 fedora ostree[2190]: Refreshed SELinux policy in 1290 ms
+Nov 05 01:04:45.504156 fedora ostree[2190]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:04:45.504478 fedora ostree[2190]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:04:45.504678 fedora ostree[2190]: Finalized deployment
+Nov 05 01:04:45.504772 fedora ostree[2190]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:04:45.750516 fedora ostree[2190]: Starting syncfs for system repo
+Nov 05 01:04:45.759178 fedora ostree[2190]: Completed syncfs() for system repo in 9 ms
+Nov 05 01:04:45.759194 fedora ostree[2190]: Starting freeze/thaw cycle for boot
+Nov 05 01:04:45.799380 fedora ostree[2190]: Completed freeze/thaw cycle for boot in 40 ms
+Nov 05 01:04:45.799433 fedora ostree[2190]: Starting freeze/thaw cycle for boot
+Nov 05 01:04:45.804134 fedora ostree[2190]: Completed freeze/thaw cycle for boot in 5 ms
+Nov 05 01:04:45.804211 fedora ostree[2190]: Bootloader updated; bootconfig swap: yes; bootversion: boot.0.1, deployment count change: 1
+Nov 05 01:04:45.804324 fedora ostree[2190]: Bootloader updated; bootconfig swap: yes; bootversion: boot.0.1, deployment count change: 1
+Nov 05 01:04:45.804693 fedora ostree[2190]: Finished writing deployment
+Nov 05 01:04:45.804829 fedora ostree[2190]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:04:45.805438 fedora ostree[2190]: Starting syncfs for system repo
+Nov 05 01:04:45.807145 fedora ostree[2190]: Completed syncfs() for system repo in 2 ms
+Nov 05 01:04:45.811091 fedora ostree[2190]: Cleanup complete
+Nov 05 01:04:45.811227 fedora ostree[2190]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:04:45.813511 fedora systemd[1]: ostree-finalize-staged.service: Deactivated successfully.
+Nov 05 01:04:45.813832 fedora systemd[1]: Stopped ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 01:04:45.814197 fedora systemd[1]: ostree-finalize-staged.service: Consumed 1.662s CPU time over 3min 18.257s wall clock time, 142.5M memory peak.
