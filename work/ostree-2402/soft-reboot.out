@@ -1,0 +1,34 @@
+BOOT_IMAGE=(hd0,gpt3)/boot/ostree/default-1c4240f208a05a2899d0da03eafea9aafd1a8587df2cebb29adb7bfcf9a6e5da/vmlinuz-7.2.15-200.fc44.x86_64 root=UUID=98d79269-6ae2-4334-ae60-01e2aa794093 rw ostree=/ostree/boot.0/default/1c4240f208a05a2899d0da03eafea9aafd1a8587df2cebb29adb7bfcf9a6e5da/0 bz2402=fixed3
+* default cab7c49ce38b8f5ae8f6bf4b9a7788e5f81c3b191d9ee1fc9272878a51951fa5.2
+    origin refspec: cab7c49ce38b8f5ae8f6bf4b9a7788e5f81c3b191d9ee1fc9272878a51951fa5
+  default cab7c49ce38b8f5ae8f6bf4b9a7788e5f81c3b191d9ee1fc9272878a51951fa5.1 (rollback)
+    origin refspec: cab7c49ce38b8f5ae8f6bf4b9a7788e5f81c3b191d9ee1fc9272878a51951fa5
+Nov 05 01:35:28.759806 fedora systemd[1]: boot.automount: Got automount request for /boot, triggered by 2070 (ostree)
+Nov 05 01:35:28.761478 fedora systemd[1]: Mounting boot.mount - /boot...
+Nov 05 01:35:28.775299 fedora systemd[1]: Mounted boot.mount - /boot.
+Nov 05 01:35:28.776098 fedora systemd[1]: boot.automount: Got automount request for /boot, triggered by 2074 (mount)
+Nov 05 01:35:28.776146 fedora systemd[1]: boot.automount: Automount point already active?
+Nov 05 01:36:01.262074 fedora systemd[1]: Starting ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment...
+Nov 05 01:36:01.277714 fedora systemd[1]: Started ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment.
+Nov 05 01:36:01.278180 fedora systemd[1]: Finished ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 01:39:22.711458 fedora systemd[1]: boot.automount: Deactivated successfully.
+Nov 05 01:39:22.711901 fedora systemd[1]: Unset automount boot.automount - EFI System Partition Automount.
+Nov 05 01:39:22.715550 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 01:39:22.841341 fedora systemd[1]: Stopping ostree-finalize-staged.service - OSTree Finalize Staged Deployment...
+Nov 05 01:39:22.865491 fedora ostree[2234]: Writing the boot filesystem via /sysroot/boot; Remounting /boot read-write: Invalid argument
+Nov 05 01:39:22.866477 fedora ostree[2234]: Finalizing staged deployment
+Nov 05 01:39:23.519329 fedora ostree[2234]: Refreshing SELinux policy
+Nov 05 01:39:24.675582 fedora ostree[2234]: Refreshed SELinux policy in 1156 ms
+Nov 05 01:39:24.682076 fedora ostree[2234]: Finalized deployment
+Nov 05 01:39:24.978414 fedora ostree[2234]: Bootloader updated; bootconfig swap: yes; bootversion: boot.1.1, deployment count change: 0
+Nov 05 01:39:24.978510 fedora ostree[2234]: Bootloader updated; bootconfig swap: yes; bootversion: boot.1.1, deployment count change: 0
+Nov 05 01:39:24.978925 fedora ostree[2234]: Finished writing deployment
+Nov 05 01:39:26.127863 fedora ostree[2234]: Cleanup complete
+Nov 05 01:39:26.130816 fedora systemd[1]: ostree-finalize-staged.service: Deactivated successfully.
+Nov 05 01:39:26.131195 fedora systemd[1]: Stopped ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 01:39:26.131567 fedora systemd[1]: ostree-finalize-staged.service: Consumed 2.515s CPU time over 3min 24.852s wall clock time, 142.8M memory peak.
+Nov 05 01:39:26.807064 fedora systemd[1]: boot.automount: Path /boot is already a mount point, refusing start.
+Nov 05 01:39:26.807087 fedora systemd[1]: Failed to set up automount boot.automount - EFI System Partition Automount.
+Nov 05 01:39:26.605074 fedora systemd[1]: systemd-soft-reboot.service: Deactivated successfully.
+Nov 05 01:39:26.605083 fedora systemd[1]: Finished systemd-soft-reboot.service - Reboot System Userspace.
+Nov 05 01:39:26.605094 fedora systemd[1]: Reached target soft-reboot.target - Reboot System Userspace.

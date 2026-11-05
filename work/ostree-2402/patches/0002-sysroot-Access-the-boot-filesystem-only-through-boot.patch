@@ -1,0 +1,151 @@
+From 9fa351a40a0310f27b0fb1cad8bd8651654c453d Mon Sep 17 00:00:00 2001
+From: agent <agent@localhost>
+Date: Thu, 5 Nov 2026 01:19:38 +0000
+Subject: [PATCH 2/5] sysroot: Access the boot filesystem only through boot_fd
+
+Most of the sysroot code reads and writes the bootloader configuration
+through self->boot_fd, but reading the current bootversion, preparing the
+new boot/loader link, the bootswap entries directory and the cleanup of
+old loader directories and initramfs overlays went through
+"boot/..." relative to sysroot_fd instead. That only names the same
+directory as long as boot/ in the sysroot is the boot filesystem.
+
+Use boot_fd everywhere, loading it where it may not be yet, so that the
+next commits can point boot_fd somewhere other than sysroot_fd + "boot".
+
+Assisted-by: https://github.com/cgwalters/cgwalters#llms
+---
+ src/libostree/ostree-sysroot-cleanup.c | 12 ++++++++----
+ src/libostree/ostree-sysroot-deploy.c  | 17 +++++++++++------
+ src/libostree/ostree-sysroot-private.h |  1 -
+ src/libostree/ostree-sysroot.c         | 16 +++++++++++-----
+ 4 files changed, 30 insertions(+), 16 deletions(-)
+
+diff --git a/src/libostree/ostree-sysroot-cleanup.c b/src/libostree/ostree-sysroot-cleanup.c
+index 6d2accde..f05b5b57 100644
+--- a/src/libostree/ostree-sysroot-cleanup.c
++++ b/src/libostree/ostree-sysroot-cleanup.c
+@@ -191,8 +191,8 @@ cleanup_other_bootversions (OstreeSysroot *self, GCancellable *cancellable, GErr
+ 
+   /* These directories are for the other major version */
+   g_string_truncate (buf, 0);
+-  g_string_append_printf (buf, "boot/loader.%d", cleanup_bootversion);
+-  if (!glnx_shutil_rm_rf_at (self->sysroot_fd, buf->str, cancellable, error))
++  g_string_append_printf (buf, "loader.%d", cleanup_bootversion);
++  if (self->boot_fd != -1 && !glnx_shutil_rm_rf_at (self->boot_fd, buf->str, cancellable, error))
+     return FALSE;
+   g_string_truncate (buf, 0);
+   g_string_append_printf (buf, "ostree/boot.%d", cleanup_bootversion);
+@@ -340,8 +340,12 @@ _ostree_sysroot_cleanup_bootfs (OstreeSysroot *self, GCancellable *cancellable,
+     }
+ 
+   /* Clean up overlay initrds */
+-  glnx_autofd int overlays_dfd
+-      = glnx_opendirat_with_errno (self->sysroot_fd, _OSTREE_SYSROOT_INITRAMFS_OVERLAYS, FALSE);
++  glnx_autofd int overlays_dfd = -1;
++  if (self->boot_fd == -1)
++    errno = ENOENT;
++  else
++    overlays_dfd
++        = glnx_opendirat_with_errno (self->boot_fd, _OSTREE_SYSROOT_BOOT_INITRAMFS_OVERLAYS, FALSE);
+   if (overlays_dfd < 0)
+     {
+       if (errno != ENOENT)
+diff --git a/src/libostree/ostree-sysroot-deploy.c b/src/libostree/ostree-sysroot-deploy.c
+index 94de4239..c18ee599 100644
+--- a/src/libostree/ostree-sysroot-deploy.c
++++ b/src/libostree/ostree-sysroot-deploy.c
+@@ -2189,9 +2189,12 @@ prepare_new_bootloader_link (OstreeSysroot *sysroot, int current_bootversion, in
+   g_assert ((current_bootversion == 0 && new_bootversion == 1)
+             || (current_bootversion == 1 && new_bootversion == 0));
+ 
++  if (!_ostree_sysroot_ensure_boot_fd (sysroot, error))
++    return FALSE;
++
+   /* This allows us to support both /boot on a seperate filesystem to / as well
+    * as on the same filesystem. */
+-  if (TEMP_FAILURE_RETRY (symlinkat (".", sysroot->sysroot_fd, "boot/boot")) < 0)
++  if (TEMP_FAILURE_RETRY (symlinkat (".", sysroot->boot_fd, "boot")) < 0)
+     if (errno != EEXIST)
+       return glnx_throw_errno_prefix (error, "symlinkat");
+ 
+@@ -2199,7 +2202,7 @@ prepare_new_bootloader_link (OstreeSysroot *sysroot, int current_bootversion, in
+ 
+   /* We shouldn't actually need to replace but it's easier to reuse
+      that code */
+-  if (!symlink_at_replace (new_target, sysroot->sysroot_fd, "boot/loader.tmp", cancellable, error))
++  if (!symlink_at_replace (new_target, sysroot->boot_fd, "loader.tmp", cancellable, error))
+     return FALSE;
+ 
+   return TRUE;
+@@ -2402,11 +2405,13 @@ write_deployments_bootswap (OstreeSysroot *self, GPtrArray *new_deployments,
+ {
+   const int new_bootversion = self->bootversion ? 0 : 1;
+ 
+-  g_autofree char *new_loader_entries_dir
+-      = g_strdup_printf ("boot/loader.%d/entries", new_bootversion);
+-  if (!glnx_shutil_rm_rf_at (self->sysroot_fd, new_loader_entries_dir, cancellable, error))
++  if (!_ostree_sysroot_ensure_boot_fd (self, error))
++    return FALSE;
++
++  g_autofree char *new_loader_entries_dir = g_strdup_printf ("loader.%d/entries", new_bootversion);
++  if (!glnx_shutil_rm_rf_at (self->boot_fd, new_loader_entries_dir, cancellable, error))
+     return FALSE;
+-  if (!glnx_shutil_mkdir_p_at (self->sysroot_fd, new_loader_entries_dir, 0755, cancellable, error))
++  if (!glnx_shutil_mkdir_p_at (self->boot_fd, new_loader_entries_dir, 0755, cancellable, error))
+     return FALSE;
+ 
+   /* Only show the osname in bootloader titles if there are multiple
+diff --git a/src/libostree/ostree-sysroot-private.h b/src/libostree/ostree-sysroot-private.h
+index f5c70872..c8640de0 100644
+--- a/src/libostree/ostree-sysroot-private.h
++++ b/src/libostree/ostree-sysroot-private.h
+@@ -122,7 +122,6 @@ struct OstreeSysroot
+ #define _OSTREE_SYSROOT_DEPLOYMENT_RUNSTATE_FLAG_TRANSIENT "unlocked-transient"
+ 
+ #define _OSTREE_SYSROOT_BOOT_INITRAMFS_OVERLAYS "ostree/initramfs-overlays"
+-#define _OSTREE_SYSROOT_INITRAMFS_OVERLAYS "boot/" _OSTREE_SYSROOT_BOOT_INITRAMFS_OVERLAYS
+ 
+ // Relative to /boot, consumed by ostree-boot-complete.service
+ #define _OSTREE_FINALIZE_STAGED_FAILURE_PATH "ostree/finalize-failure.stamp"
+diff --git a/src/libostree/ostree-sysroot.c b/src/libostree/ostree-sysroot.c
+index 5b837bb2..3f257bec 100644
+--- a/src/libostree/ostree-sysroot.c
++++ b/src/libostree/ostree-sysroot.c
+@@ -730,8 +730,11 @@ read_current_bootversion (OstreeSysroot *self, int *out_bootversion, GCancellabl
+   int ret_bootversion;
+   struct stat stbuf;
+ 
+-  if (!glnx_fstatat_allow_noent (self->sysroot_fd, "boot/loader", &stbuf, AT_SYMLINK_NOFOLLOW,
+-                                 error))
++  if (!_ostree_sysroot_maybe_load_boot_fd (self, error))
++    return FALSE;
++  if (self->boot_fd == -1)
++    errno = ENOENT;
++  else if (!glnx_fstatat_allow_noent (self->boot_fd, "loader", &stbuf, AT_SYMLINK_NOFOLLOW, error))
+     return FALSE;
+   if (errno == ENOENT)
+     {
+@@ -744,7 +747,7 @@ read_current_bootversion (OstreeSysroot *self, int *out_bootversion, GCancellabl
+         return glnx_throw (error, "Not a symbolic link: boot/loader");
+ 
+       g_autofree char *target
+-          = glnx_readlinkat_malloc (self->sysroot_fd, "boot/loader", cancellable, error);
++          = glnx_readlinkat_malloc (self->boot_fd, "loader", cancellable, error);
+       if (!target)
+         return FALSE;
+       if (g_strcmp0 (target, "loader.0") == 0)
+@@ -1346,8 +1349,11 @@ sysroot_load_from_bootloader_configs (OstreeSysroot *self, GCancellable *cancell
+ 
+   if (self->root_is_ostree_booted && !self->booted_deployment)
+     {
+-      if (!glnx_fstatat_allow_noent (self->sysroot_fd, "boot/loader", NULL, AT_SYMLINK_NOFOLLOW,
+-                                     error))
++      /* read_current_bootversion() loaded boot_fd if there is a boot/ */
++      if (self->boot_fd == -1)
++        errno = ENOENT;
++      else if (!glnx_fstatat_allow_noent (self->boot_fd, "loader", NULL, AT_SYMLINK_NOFOLLOW,
++                                          error))
+         return FALSE;
+       if (errno == ENOENT)
+         {
