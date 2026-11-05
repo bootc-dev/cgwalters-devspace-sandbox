@@ -1,0 +1,17 @@
+# Layers onto an image from bootc's `just variant=composefs build`:
+# - unless dps=true, turns off the dev image's discoverable-partitions install
+#   config, since systemd's DPS root discovery needs UEFI loader variables,
+#   which a SeaBIOS boot doesn't have; install then writes root=UUID= as on a
+#   stock image. Keep it (dps=true) for UEFI runs, where gpt-auto finds the
+#   root disk and creates boot.automount for the ESP;
+# - writes MARKER to /usr/share/bz2402-marker, so idle-stage-reboot.sh can
+#   tell which image booted.
+# Usage: podman build --build-arg=base=IMAGE --build-arg=marker=MARKER [--build-arg=dps=true] .
+ARG base
+FROM $base
+ARG marker=base
+ARG dps=false
+RUN if [ "$dps" != true ]; then \
+      printf '[install]\ndiscoverable-partitions = false\n' > /usr/lib/bootc/install/90-bios-root-karg.toml; \
+    fi && \
+    echo "$marker" > /usr/share/bz2402-marker

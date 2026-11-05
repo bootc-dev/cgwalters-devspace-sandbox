@@ -1,0 +1,38 @@
++ rpm -q bootc systemd kernel
+bootc-1.17.4-1.fc44.x86_64
+systemd-259.10-1.fc44.x86_64
+kernel-7.2.15-200.fc44.x86_64
++ cat /proc/cmdline
+BOOT_IMAGE=(hd0,gpt3)/boot/bootc_composefs-606eeb5cbfab7f7a0cd7e9a436ab3910d5ca645453dc10ecc1292dac35f1096e52cbbd0d7e6015c8fc23f076521d211f94ad59212c03d4813725901e40057fd5/vmlinuz root=UUID=3ae64863-ec83-44a3-9cd3-cdd9a97742ca rw composefs.digest=v1-sha512-12:606eeb5cbfab7f7a0cd7e9a436ab3910d5ca645453dc10ecc1292dac35f1096e52cbbd0d7e6015c8fc23f076521d211f94ad59212c03d4813725901e40057fd5 kargsd-test=1 kargsd-othertest=2 console=ttyS0,115200n8 testing-kargsd=3 console=hvc0
++ uptime
+ 02:49:59 up 1 min,  1 user,  load average: 0.16, 0.09, 0.03
++ findmnt /
+TARGET SOURCE                                                                                                                                     FSTYPE  OPTIONS
+/      composefs:606eeb5cbfab7f7a0cd7e9a436ab3910d5ca645453dc10ecc1292dac35f1096e52cbbd0d7e6015c8fc23f076521d211f94ad59212c03d4813725901e40057fd5 overlay ro,relatime,seclabel,lowerdir=/proc/self/fd/5::/proc/self/fd/6,redirect_dir=on,metacopy=on,verity=require
++ findmnt /sysroot
+TARGET   SOURCE    FSTYPE OPTIONS
+/sysroot /dev/vda3 ext4   ro,relatime,seclabel
++ findmnt -R /boot
+findmnt-boot-rc=1
++ echo findmnt-boot-rc=1
++ systemctl list-units 'boot*' 'efi*' --all --no-pager --plain
++ head -4
+UNIT                               LOAD      ACTIVE   SUB    DESCRIPTION
+boot.automount                     not-found inactive dead   boot.automount
+boot.mount                         not-found inactive dead   boot.mount
+bootc-fetch-apply-updates.service  loaded    inactive dead   Apply bootc updates
++ SYSTEMD_LOG_LEVEL=debug
++ /usr/lib/systemd/system-generators/systemd-gpt-auto-generator /run/g /run/g /run/g
++ tail -4
+Found container virtualization none.
+Disabling partition auto-detection, root= is neither unset, nor set to 'gpt-auto', 'gpt-auto-force', 'dissect' or 'dissect-force'.
+Neither root nor /usr/ file system are on a (single) block device.
+Skipping automatic GPT dissection logic, root file system not backed by a (single) whole block device.
++ bootc status
+error: Status: Finding ESP used for booting: Reading LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f: SystemNotUEFI
+bootc-status-rc=1
++ echo bootc-status-rc=1
++ bootc switch --transport containers-storage localhost/bz-stock-up
+error: Switching: Initializing storage: Finding ESP used for booting: Reading LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f: SystemNotUEFI
+switch-rc=1
++ echo switch-rc=1
