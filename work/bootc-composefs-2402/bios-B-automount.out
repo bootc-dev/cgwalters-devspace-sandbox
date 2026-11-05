@@ -1,0 +1,172 @@
+● boot.automount - EFI System Partition Automount
+     Loaded: loaded (/run/systemd/generator.late/boot.automount; generated)
+     Active: active (waiting) since Thu 2026-11-05 04:03:58 UTC; 9ms ago
+ 04:07:08 up 3 min,  1 user,  load average: 0.04, 0.06, 0.02
+TARGET SOURCE    FSTYPE OPTIONS
+/boot  systemd-1 autofs rw,relatime,fd=91,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=14818
+active
+ls: cannot open directory '/boot': Operation not permitted
+unshare-ls-rc=2
+switch-rc=0
+apiVersion: org.containers.bootc/v1
+kind: BootcHost
+metadata:
+  name: host
+spec:
+  image:
+    image: /var/tmp/up.ociarchive
+    transport: oci-archive
+  bootOrder: default
+status:
+  staged:
+    image:
+      image:
+        image: /var/tmp/up.ociarchive
+        transport: oci-archive
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.677940157Z
+      imageDigest: sha256:3d5b585baf54c5e6e3357c6d746016c695ac87a13a7c1e5e6a3a943894a2a6e2
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: true
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: e3a83825e01e8885290831ce941bd9642d28801a93a2b669d382d8870386cbd3d55ab610578cfeac378df7482d5d243fe49ef80f551da539203f986413c2060b
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  booted:
+    image:
+      image:
+        image: localhost/bz:bios-base
+        transport: registry
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.230112017Z
+      imageDigest: sha256:d160046d1b1b5988ca76b5dc4bc5f1690be3212e599c6bc5bbf67ddf7e8f983b
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: false
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: fb1463420c2e44ed016c3a46964c37be35a4e611928a0453b1d4e4a259d17b78b82b5ee328457b0f831d13ba845090c55a7bc821f17bfd73b17ab868874cb1ca
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  rollback: null
+  rollbackQueued: false
+  type: null
+  usrOverlay: null
+  readOnly: false
+ 04:10:24 up 6 min,  1 user,  load average: 0.07, 0.10, 0.04
+TARGET  SOURCE    FSTYPE OPTIONS
+/boot   systemd-1 autofs rw,relatime,fd=91,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=14818
+`-/boot /dev/vda2 vfat   rw,nosuid,nodev,noexec,relatime,fmask=0177,dmask=0077,codepage=437,iocharset=ascii,shortname=mixed,errors=remount-ro
+active
+active
+hold-pid=2235
+lr-x------. 1 root root 64 Nov  5 04:10 11 -> /boot
+upgrade-bios-up
+marker-match-rc=0
+apiVersion: org.containers.bootc/v1
+kind: BootcHost
+metadata:
+  name: host
+spec:
+  image:
+    image: /var/tmp/up.ociarchive
+    transport: oci-archive
+  bootOrder: default
+status:
+  staged: null
+  booted:
+    image:
+      image:
+        image: /var/tmp/up.ociarchive
+        transport: oci-archive
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.677940157Z
+      imageDigest: sha256:3d5b585baf54c5e6e3357c6d746016c695ac87a13a7c1e5e6a3a943894a2a6e2
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: false
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: e3a83825e01e8885290831ce941bd9642d28801a93a2b669d382d8870386cbd3d55ab610578cfeac378df7482d5d243fe49ef80f551da539203f986413c2060b
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  rollback:
+    image:
+      image:
+        image: localhost/bz:bios-base
+        transport: registry
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.230112017Z
+      imageDigest: sha256:d160046d1b1b5988ca76b5dc4bc5f1690be3212e599c6bc5bbf67ddf7e8f983b
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: true
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: fb1463420c2e44ed016c3a46964c37be35a4e611928a0453b1d4e4a259d17b78b82b5ee328457b0f831d13ba845090c55a7bc821f17bfd73b17ab868874cb1ca
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  rollbackQueued: false
+  type: null
+  usrOverlay: null
+  readOnly: false
+Nov 05 04:03:32.943530 fedora systemd[1]: Starting bootc-root-setup.service - bootc setup root...
+Nov 05 04:03:32.984444 fedora systemd[1]: Finished bootc-root-setup.service - bootc setup root.
+Nov 05 04:03:35.076601 fedora systemd[1]: Starting bootc-sysusers-shadow-sync.service - Sync /etc/shadow and /etc/gshadow before systemd-sysusers...
+Nov 05 04:03:35.113231 fedora systemd[1]: Finished bootc-sysusers-shadow-sync.service - Sync /etc/shadow and /etc/gshadow before systemd-sysusers.
+Nov 05 04:03:37.488820 fedora systemd[1]: bootc-fetch-apply-updates.timer - Apply bootc updates skipped, unmet condition check ConditionPathExists=/run/ostree-booted
+Nov 05 04:03:37.522960 fedora systemd[1]: Started bootc-generic-growpart.service - Bootc Fallback Root Filesystem Grow.
+Nov 05 04:03:37.547825 fedora bootc-generic-growpart[1766]: Backing device: /dev/vda3
+Nov 05 04:03:37.581748 fedora systemd[1]: Starting bootloader-update.service - Update bootloader on boot...
+Nov 05 04:03:37.721711 fedora bootupctl[1845]: No components installed.
+Nov 05 04:03:37.725584 fedora systemd[1]: Finished bootloader-update.service - Update bootloader on boot.
+Nov 05 04:03:38.876077 fedora bootc-generic-growpart[1995]: NOCHANGE: partition 3 could only be grown by 2015 [fudge=2048]
+Nov 05 04:03:38.879376 fedora systemd[1]: bootc-generic-growpart.service: Deactivated successfully.
+Nov 05 04:03:58.484645 fedora systemd[1]: Set up automount boot.automount - EFI System Partition Automount.
+Nov 05 04:07:09.061750 fedora systemd[1]: boot.automount: Got automount request for /boot, triggered by 2174 (bootc)
+Nov 05 04:07:09.115280 fedora systemd[1]: Mounting boot.mount - EFI System Partition Automount...
+Nov 05 04:07:09.126828 fedora systemd[1]: Mounted boot.mount - EFI System Partition Automount.
+Nov 05 04:07:10.270388 fedora systemd[1]: Starting bootc-finalize-staged-hold.service - Hold /boot Open for Composefs Finalize Staged Deployment...
+Nov 05 04:07:10.283024 fedora systemd[1]: Started bootc-finalize-staged-hold.service - Hold /boot Open for Composefs Finalize Staged Deployment.
+Nov 05 04:07:10.283649 fedora systemd[1]: Finished bootc-finalize-staged.service - Composefs Finalize Staged Deployment.
+Nov 05 04:10:24.228003 fedora systemd[1]: bootloader-update.service: Deactivated successfully.
+Nov 05 04:10:24.228084 fedora systemd[1]: Stopped bootloader-update.service - Update bootloader on boot.
+Nov 05 04:10:24.892728 fedora systemd[1]: Stopping bootc-finalize-staged.service - Composefs Finalize Staged Deployment...
+Nov 05 04:10:25.067103 fedora bootc[2369]: Starting composefs staged deployment finalization
+Nov 05 04:10:25.460431 fedora bootc[2369]: Starting composefs garbage collection
+Nov 05 04:10:25.488661 fedora systemd[1]: bootc-finalize-staged.service: Deactivated successfully.
+Nov 05 04:10:25.488938 fedora systemd[1]: Stopped bootc-finalize-staged.service - Composefs Finalize Staged Deployment.
+Nov 05 04:10:25.491910 fedora systemd[1]: Stopping bootc-finalize-staged-hold.service - Hold /boot Open for Composefs Finalize Staged Deployment...
+Nov 05 04:10:25.497075 fedora systemd[1]: bootc-finalize-staged-hold.service: Deactivated successfully.
+Nov 05 04:10:25.497301 fedora systemd[1]: Stopped bootc-finalize-staged-hold.service - Hold /boot Open for Composefs Finalize Staged Deployment.
+Nov 05 04:10:25.505514 fedora systemd[1]: Unmounting boot.mount - EFI System Partition Automount...
+Nov 05 04:10:25.523809 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 04:10:25.524169 fedora systemd[1]: Unmounted boot.mount - EFI System Partition Automount.
+Nov 05 04:10:25.534214 fedora systemd[1]: boot.automount: Deactivated successfully.
+Nov 05 04:10:25.534343 fedora systemd[1]: Unset automount boot.automount - EFI System Partition Automount.
