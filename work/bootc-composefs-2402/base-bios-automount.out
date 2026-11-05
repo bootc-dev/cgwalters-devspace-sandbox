@@ -1,0 +1,3 @@
+● boot.automount - EFI System Partition Automount
+     Loaded: loaded (/run/systemd/generator.late/boot.automount; generated)
+     Active: active (waiting) since Thu 2026-11-05 03:19:06 UTC; 12ms ago

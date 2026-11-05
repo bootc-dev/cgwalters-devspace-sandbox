@@ -1,0 +1,12 @@
+# Layers onto an image from bootc's `just variant=composefs build`:
+# - turns off the dev image's discoverable-partitions install config, since
+#   systemd's DPS root discovery needs UEFI loader variables, which a SeaBIOS
+#   boot doesn't have; install then writes root=UUID= as on a stock image;
+# - writes MARKER to /usr/share/bz2402-marker, so idle-stage-reboot.sh can
+#   tell which image booted.
+# Usage: podman build --build-arg=base=IMAGE --build-arg=marker=MARKER .
+ARG base
+FROM $base
+ARG marker=base
+RUN printf '[install]\ndiscoverable-partitions = false\n' > /usr/lib/bootc/install/90-bios-root-karg.toml && \
+    echo "$marker" > /usr/share/bz2402-marker
