@@ -1,0 +1,7 @@
+libostree:
+ Version: '2026.7'
+ DevelBuild: yes
+ Features:
+error: loading sysroot: Unexpected state: /run/ostree-booted found, but no /boot/loader directory
+error: loading sysroot: Unexpected state: /run/ostree-booted found, but no /boot/loader directory
+rc=1
