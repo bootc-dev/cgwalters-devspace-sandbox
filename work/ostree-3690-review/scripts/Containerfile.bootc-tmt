@@ -1,0 +1,13 @@
+# Tools for bootc's `just build` and `cargo xtask run-tmt` (bcvk with a
+# libvirt session), on top of Containerfile.vmhost, for hosts without them.
+# Run it like vmhost, plus -v ~/src:/src, then start the libvirt daemons in it:
+#   for d in virtlogd virtlockd virtstoraged virtnetworkd virtqemud; do $d -d; done
+# Nested podman and libvirt can't set SELinux labels in a rootless container,
+# and the subscription mounts leave a /run/secrets that fails bootc's lint.
+FROM localhost/vmhost
+RUN dnf -y --disablerepo=fedora-cisco-openh264 install libvirt-daemon-kvm libvirt-client edk2-ovmf tmt just cargo rust rsync gcc git make \
+      openssl xorriso which && dnf clean all && \
+    mkdir -p /etc/containers/containers.conf.d && \
+    printf '[containers]\nlabel=false\n' > /etc/containers/containers.conf.d/50-nolabel.conf && \
+    for f in /etc/containers/mounts.conf /usr/share/containers/mounts.conf; do if test -e $f; then : > $f; fi; done && \
+    printf 'security_driver = "none"\nremember_owner = 0\n' >> /etc/libvirt/qemu.conf

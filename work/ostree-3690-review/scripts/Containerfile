@@ -1,0 +1,29 @@
+# Build context: an ostree git checkout. Builds it with the configure flags of
+# Fedora's ostree.spec and layers the result onto fedora-bootc:44, regenerating
+# the initramfs since it carries ostree-prepare-root.
+ARG base=quay.io/fedora/fedora-bootc:44
+
+FROM quay.io/fedora/fedora:44 AS buildroot
+RUN dnf -y install dnf5-plugins git jq openssl strace elfutils && \
+    dnf -y --enablerepo='*-source' builddep ostree && dnf clean all
+
+FROM buildroot AS build
+COPY . /src
+WORKDIR /src
+RUN env NOCONFIGURE=1 ./autogen.sh && \
+    ./configure --prefix=/usr --libdir=/usr/lib64 --libexecdir=/usr/libexec --sysconfdir=/etc \
+      --localstatedir=/var --disable-gtk-doc --with-selinux --with-curl --with-openssl \
+      --without-soup --with-soup3 --with-composefs --with-dracut=yesbutnoconf && \
+    make -j$(nproc) && make install DESTDIR=/out
+
+FROM buildroot AS integration-build
+RUN dnf -y install cargo rust
+COPY tests/bootc-integration /build
+WORKDIR /build
+RUN cargo build --release
+
+FROM $base
+COPY --from=build /out/usr /usr
+COPY --from=integration-build /build/target/release/ostree-bootc-integration-tests /usr/bin/
+RUN kver=$(cd /usr/lib/modules && echo *) && dracut -f /usr/lib/modules/$kver/initramfs.img $kver && \
+    ostree --version && bootc container lint
