@@ -1,0 +1,9 @@
+# A host for the VMs when the real host has no qemu, virtiofsd or root: run
+#   podman run -d --name vmh --privileged --network=host --device /dev/kvm \
+#     --device /dev/fuse -v /var/tmp/w:/var/tmp/w localhost/vmhost sleep infinity
+# and use `podman exec vmh` for bcvk and `QEMU=qemu-kvm bash vm.sh`. With the
+# host network, SSH from the host to the forwarded port works directly. The
+# build context needs the bcvk binary (0.22.0 release).
+FROM quay.io/podman/stable:latest
+RUN dnf -y install qemu-kvm-core qemu-img virtiofsd openssh-clients procps-ng && dnf clean all
+COPY bcvk /usr/local/bin/bcvk
