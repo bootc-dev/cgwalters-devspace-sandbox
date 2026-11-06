@@ -1,0 +1,13 @@
+test privileged_verify_sysroot                ... ok
+test privileged_verify_composefs              ... ok
+test privileged_verify_extensions             ... ok
+test privileged_verify_ostree_booted          ... ok
+test privileged_verify_nofifo                 ... ok
+test privileged_verify_selinux_labels         ... ok
+test privileged_verify_sysroot_readonly       ... ok
+test privileged_verify_ostree_run_metadata    ... ok
+test privileged_verify_boot_path_not_required ... ok
+test privileged_verify_ostree_cli             ... ok
+test privileged_verify_osinit_unshare         ... ok
+test privileged_verify_mtime                  ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s
