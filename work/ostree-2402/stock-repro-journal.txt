@@ -1,0 +1,30 @@
+Nov 05 00:20:37.117029 fedora systemd[1]: Set up automount boot.automount - EFI System Partition Automount.
+Nov 05 00:20:37.649959 fedora systemd[1]: Mounting boot.mount - /boot...
+Nov 05 00:20:37.665109 fedora systemd[1]: Mounted boot.mount - /boot.
+Nov 05 00:23:18.595767 fedora systemd[1]: Unmounting boot.mount - /boot...
+Nov 05 00:23:18.612718 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 00:23:18.613031 fedora systemd[1]: Unmounted boot.mount - /boot.
+Nov 05 00:23:22.856912 fedora systemd[1]: boot.automount: Got automount request for /boot, triggered by 2042 (ostree)
+Nov 05 00:23:22.858631 fedora systemd[1]: Mounting boot.mount - /boot...
+Nov 05 00:23:22.872822 fedora systemd[1]: Mounted boot.mount - /boot.
+Nov 05 00:23:22.886683 fedora ostree[2047]: Starting syncfs for system repo
+Nov 05 00:23:22.895461 fedora ostree[2047]: Completed syncfs() for system repo in 8 ms
+Nov 05 00:23:22.909191 fedora systemd[1]: Starting ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment...
+Nov 05 00:23:22.920325 fedora systemd[1]: Started ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment.
+Nov 05 00:23:22.919000 fedora audit[1]: SERVICE_START pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=ostree-finalize-staged-hold comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success'
+Nov 05 00:23:22.920964 fedora systemd[1]: Finished ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 00:23:22.920000 fedora audit[1]: SERVICE_START pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=ostree-finalize-staged comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success'
+Nov 05 00:23:28.438374 fedora ostree[2047]: Created deployment; subtasks: checkout=3.0s composefs=1.9s etc=493ms
+Nov 05 00:23:28.445452 fedora ostree[2047]: Starting syncfs for system repo
+Nov 05 00:23:28.497948 fedora ostree[2047]: Completed syncfs() for system repo in 53 ms
+Nov 05 00:23:28.503666 fedora ostree[2047]: Starting syncfs for system repo
+Nov 05 00:23:28.505556 fedora ostree[2047]: Completed syncfs() for system repo in 1 ms
+Nov 05 00:24:34.354870 fedora systemd[1]: boot.automount: Deactivated successfully.
+Nov 05 00:24:34.355230 fedora systemd[1]: Unset automount boot.automount - EFI System Partition Automount.
+Nov 05 00:24:34.359060 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 00:24:34.482500 fedora systemd[1]: Stopping ostree-finalize-staged.service - OSTree Finalize Staged Deployment...
+Nov 05 00:24:34.557391 fedora ostree[2141]: error: Remounting /boot read-write: Invalid argument
+Nov 05 00:24:34.559240 fedora systemd[1]: ostree-finalize-staged.service: Control process exited, code=exited, status=1/FAILURE
+Nov 05 00:24:34.559406 fedora systemd[1]: ostree-finalize-staged.service: Failed with result 'exit-code'.
+Nov 05 00:24:34.559695 fedora systemd[1]: Stopped ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 00:24:34.559000 fedora audit[1]: SERVICE_STOP pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=ostree-finalize-staged comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=failed'

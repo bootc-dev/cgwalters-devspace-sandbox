@@ -1,0 +1,111 @@
+From 6a23cff1df88869ca84a7416e58c9b4f76817eb2 Mon Sep 17 00:00:00 2001
+From: Colin Walters <walters@verbum.org>
+Date: Sat, 7 Nov 2026 01:44:07 +0000
+Subject: [PATCH 3/5] sysroot: Read the booted boot filesystem via
+ /sysroot/boot
+
+When /boot is a directory of the physical root, the deployment's /boot
+is just a bind mount made by ostree-system-generator, and other units
+can stack an automount on it: systemd-gpt-auto-generator does so for
+an unused ESP on BIOS systems. Once that automount idles out, /boot
+from a new mount namespace gives EPERM, so `unshare -m ostree admin
+status` fails. /sysroot/boot is never automounted, so open boot_fd
+from there instead.
+
+finalize-staged --hold used to pin /boot only as a side effect of the
+sysroot's boot_fd; now that this fd may be for /sysroot/boot, open
+/boot explicitly. Otherwise the automount expires, stopping boot.mount
+stops ostree-finalize-staged.service (RequiresMountsFor=/boot) long
+before shutdown, and finalize then hangs in autofs_expire_wait.
+
+See https://github.com/bootc-dev/bootc/issues/2402
+
+Assisted-by: https://github.com/cgwalters/cgwalters#llms
+---
+ src/libostree/ostree-sysroot.c                | 32 ++++++++++++++++---
+ src/ostree/ot-admin-builtin-finalize-staged.c |  8 ++++-
+ 2 files changed, 35 insertions(+), 5 deletions(-)
+
+diff --git a/src/libostree/ostree-sysroot.c b/src/libostree/ostree-sysroot.c
+index 3f257bec..66a0f11d 100644
+--- a/src/libostree/ostree-sysroot.c
++++ b/src/libostree/ostree-sysroot.c
+@@ -353,6 +353,30 @@ validate_boot_fd (OstreeSysroot *self, int fd, GError **error)
+   return TRUE;
+ }
+ 
++/* Path to the boot filesystem of a booted system. When /boot is a directory of
++ * the physical root, the deployment's /boot is only a bind mount of it made by
++ * ostree-system-generator, and other units can stack an automount on that
++ * path; systemd-gpt-auto-generator does for an unused ESP, e.g. when booted
++ * via BIOS. Once that automount expires, /boot is no longer reachable from
++ * another mount namespace (EPERM), so use the source, which always is.
++ */
++static const char *
++booted_boot_path (void)
++{
++  if (otcore_boot_is_on_physical_root ("/sysroot"))
++    return "/sysroot/boot";
++  return "/boot";
++}
++
++/* Open the boot/ directory, or return -1 with errno set */
++static int
++open_boot_dir (OstreeSysroot *self)
++{
++  if (self->root_is_ostree_booted)
++    return glnx_opendirat_with_errno (AT_FDCWD, booted_boot_path (), TRUE);
++  return glnx_opendirat_with_errno (self->sysroot_fd, "boot", TRUE);
++}
++
+ /* Require that both self->sysroot_fd is set.
+  * If the sysroot has a boot/ subdirectory, it will be loaded.
+  * If not, self->boot_fd will remain -1.
+@@ -367,7 +391,7 @@ _ostree_sysroot_maybe_load_boot_fd (OstreeSysroot *self, GError **error)
+     return FALSE;
+   if (self->boot_fd == -1)
+     {
+-      glnx_autofd int fd = glnx_opendirat_with_errno (self->sysroot_fd, "boot", TRUE);
++      glnx_autofd int fd = open_boot_dir (self);
+       if (fd < 0)
+         {
+           if (errno != ENOENT)
+@@ -391,9 +415,9 @@ _ostree_sysroot_ensure_boot_fd (OstreeSysroot *self, GError **error)
+     return FALSE;
+   if (self->boot_fd == -1)
+     {
+-      glnx_autofd int fd = -1;
+-      if (!glnx_opendirat (self->sysroot_fd, "boot", TRUE, &fd, error))
+-        return FALSE;
++      glnx_autofd int fd = open_boot_dir (self);
++      if (fd < 0)
++        return glnx_throw_errno_prefix (error, "opendir(boot)");
+       if (!validate_boot_fd (self, fd, error))
+         return FALSE;
+       self->boot_fd = glnx_steal_fd (&fd);
+diff --git a/src/ostree/ot-admin-builtin-finalize-staged.c b/src/ostree/ot-admin-builtin-finalize-staged.c
+index 1e5c2df1..8a443311 100644
+--- a/src/ostree/ot-admin-builtin-finalize-staged.c
++++ b/src/ostree/ot-admin-builtin-finalize-staged.c
+@@ -71,11 +71,17 @@ ot_admin_builtin_finalize_staged (int argc, char **argv, OstreeCommandInvocation
+               cancellable, error))
+         return FALSE;
+ 
+-      /* By default the sysroot now holds a file descriptor for /boot open.
++      /* Hold /boot open so that an automount there doesn't expire: that
++       * would stop boot.mount, and with it ostree-finalize-staged.service,
++       * which has RequiresMountsFor=/boot, finalizing far too early. The
++       * sysroot's own fd may be for /sysroot/boot instead, so open the path.
+        * We want that open until the deployment is finalized during
+        * system shutdown, so block until we get SIGTERM which systemd will send
+        * when the unit is stopped, then we'll exit and release it.
+        */
++      glnx_autofd int boot_fd = -1;
++      if (!glnx_opendirat (AT_FDCWD, "/boot", TRUE, &boot_fd, error))
++        return FALSE;
+       pause ();
+     }
+   else
+-- 
+2.56.0
+
