@@ -1,0 +1,66 @@
+From 3532702865a72275dc2d3a9a92f328769d10db33 Mon Sep 17 00:00:00 2001
+From: cgwalters-bot <cgwalters-bot@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 07:26:35 -0500
+Subject: [PATCH 4/4] tests/bootc-integration: Check that the /boot path isn't
+ needed
+
+In a new mount namespace, put an empty tmpfs over /boot, like an expired
+automount stacked on the boot bind mount, then check that
+`ostree admin status` works and that `kargs edit-in-place` changes the
+real bootloader entries rather than files in the tmpfs. This only applies
+when /boot is on the physical root.
+
+Related: https://github.com/bootc-dev/bootc/issues/2402
+
+Assisted-by: https://github.com/cgwalters/cgwalters#llms
+---
+ .../bootc-integration/src/tests/privileged.rs | 33 +++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/tests/bootc-integration/src/tests/privileged.rs b/tests/bootc-integration/src/tests/privileged.rs
+index adc64563..0b939212 100644
+--- a/tests/bootc-integration/src/tests/privileged.rs
++++ b/tests/bootc-integration/src/tests/privileged.rs
+@@ -181,6 +181,39 @@ booted_test!(privileged_verify_osinit_unshare, {
+     Ok(())
+ });
+ 
++// https://github.com/bootc-dev/bootc/issues/2402
++booted_test!(privileged_verify_boot_path_not_required, {
++    let sh = Shell::new()?;
++    // This is about /boot being on the physical root, where the deployment's
++    // /boot is just a bind mount of /sysroot/boot. With a separate boot
++    // partition, /sysroot/boot is an empty mountpoint.
++    let on_physical_root =
++        std::fs::symlink_metadata("/sysroot/boot/loader").is_ok_and(|m| m.file_type().is_symlink());
++    if !on_physical_root {
++        return Ok(());
++    }
++
++    // In a new mount namespace, put an empty tmpfs over /boot: like an
++    // automount stacked on it that has expired, /boot is then not the boot
++    // filesystem. Reading and writing the bootloader entries must still work.
++    let karg = "ostree.test-boot-path=1";
++    let script = format!(
++        "mount -t tmpfs tmpfs /boot && ostree admin status && \
++         ostree admin kargs edit-in-place --append-if-missing={karg}"
++    );
++    cmd!(sh, "unshare -m --propagation private sh -c {script}").run()?;
++
++    // The real entries have the new karg
++    let entries = cmd!(sh, "grep -l -r -F {karg} /boot/loader/entries")
++        .ignore_status()
++        .read()?;
++    ensure!(
++        !entries.is_empty(),
++        "{karg} not found in /boot/loader/entries; was it written to the tmpfs?"
++    );
++    Ok(())
++});
++
+ privileged_test!(privileged_verify_nofifo, {
+     let sh = Shell::new()?;
+     let tmp = tempfile::tempdir()?;
+-- 
+2.52.0
+
