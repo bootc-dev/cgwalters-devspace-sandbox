@@ -1,0 +1,7 @@
+# Overlay an ostree build (`make install DESTDIR=out/<variant>`) onto a
+# bootable base image. The build context is out/<variant>.
+ARG BASE=quay.io/fedora/fedora-bootc:44
+FROM $BASE
+COPY usr/ /usr/
+RUN rm -rf /usr/include /usr/share/gtk-doc /usr/lib64/pkgconfig /usr/lib64/*.la && \
+    ostree --version && ldd /usr/bin/bootc | grep -q libostree
