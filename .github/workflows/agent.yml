@@ -37,7 +37,7 @@ on:
       pool:
         description: "Inference pool (.github/agentic-job/pools.json)"
         type: choice
-        options: [claude, openai, mistral]
+        options: [claude, openai, astra, mistral]
         default: claude
         required: true
       agent:
