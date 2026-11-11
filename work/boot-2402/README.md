@@ -10,6 +10,9 @@ waits again, reboots, and checks whether the new deployment booted. It records
 how `/boot` was mounted at each step. Results and evidence are in
 [RESULTS.md](RESULTS.md).
 
+For installer layouts, ostree's read-only bind mount, systemd automount history
+and the rationale for the fix, see [HISTORY.md](HISTORY.md).
+
 ## Requirements
 
 You need `/dev/kvm`, `qemu-kvm` (or set `QEMU=qemu-system-x86_64`), OVMF
