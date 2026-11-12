@@ -1,0 +1,4 @@
+test privileged_verify_ostree_cli             ... ok
+test privileged_verify_boot_path_not_required ... ok
+test privileged_verify_mtime                  ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s

@@ -1,0 +1,16 @@
+ Git: a4cb6781b92da59107a6e6c44bee77898054cc25
+$ unshare -m --propagation private sh -c "mount -t tmpfs tmpfs /boot && ostree admin status && ostree admin kargs edit-in-place --append-if-missing=ostree.test-boot-path=1"
+error: loading sysroot: Unexpected state: /run/ostree-booted found, but no /boot/loader directory
+test privileged_verify_boot_path_not_required ... FAILED
+
+failures:
+
+---- privileged_verify_boot_path_not_required ----
+command exited with non-zero code `unshare -m --propagation private sh -c "mount -t tmpfs tmpfs /boot && ostree admin status && ostree admin kargs edit-in-place --append-if-missing=ostree.test-boot-path=1"`: 1
+
+
+failures:
+    privileged_verify_boot_path_not_required
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.01s
+

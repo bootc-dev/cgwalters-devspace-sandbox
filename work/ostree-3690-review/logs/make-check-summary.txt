@@ -1,0 +1,44 @@
+== mc-fix
+# TOTAL: 1017
+# PASS:  992
+# SKIP:  21
+# XFAIL: 0
+# FAIL:  0
+# XPASS: 0
+# ERROR: 4
+ERROR: tests/test-remote-headers.sh - too few tests run (expected 2, got 0)
+ERROR: tests/test-remote-headers.sh - exited with status 1
+ERROR: tests/test-basic-user-only.sh - too few tests run (expected 100, got 93)
+ERROR: tests/test-basic-user-only.sh - exited with status 1
+make-check-rc=2
+== mc-main
+# TOTAL: 1017
+# PASS:  992
+# SKIP:  21
+# XFAIL: 0
+# FAIL:  0
+# XPASS: 0
+# ERROR: 4
+ERROR: tests/test-remote-headers.sh - too few tests run (expected 2, got 0)
+ERROR: tests/test-remote-headers.sh - exited with status 1
+ERROR: tests/test-basic-user-only.sh - too few tests run (expected 100, got 93)
+ERROR: tests/test-basic-user-only.sh - exited with status 1
+make-check-rc=2
+== mc-main-yaml
+# TOTAL: 1022
+# PASS:  1001
+# SKIP:  21
+# XFAIL: 0
+# FAIL:  0
+# XPASS: 0
+# ERROR: 0
+make-check-rc=0
+== mc-fix-yaml
+# TOTAL: 1022
+# PASS:  1001
+# SKIP:  21
+# XFAIL: 0
+# FAIL:  0
+# XPASS: 0
+# ERROR: 0
+make-check-rc=0
