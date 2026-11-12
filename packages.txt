@@ -1,0 +1,15 @@
+# The development toolchain installed on every devspace, with dnf (RHEL 10
+# plus EPEL). SSH sessions have no sudo, so anything they need goes here.
+# TODO: align with what bootc-dev/actions' bootc-ubuntu-setup installs, or
+# move to a devcontainer by default, with the podman socket mounted in.
+podman buildah skopeo
+gcc gcc-c++ make pkgconf openssl-devel
+# Build dependencies shared by bootc, ostree-ext and composefs-rs
+libzstd-devel clang-devel ostree-devel glib2-devel
+rust cargo rustfmt clippy
+python3 python3-pip git
+# VM stack for bcvk-based integration tests (rootless, via /dev/kvm).
+# virt-fw-vars (python3-virt-firmware) is what bcvk enrolls Secure Boot
+# keys with. bcvk itself isn't here: EPEL's is older than bootc CI's, and
+# the bot's bot-devspace provision installs CI's pinned release per user.
+qemu-kvm libvirt virtiofsd python3-virt-firmware
