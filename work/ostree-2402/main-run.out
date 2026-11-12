@@ -1,0 +1,43 @@
+ 01:47:16 up 3 min,  1 user,  load average: 0.07, 0.06, 0.01
+TARGET SOURCE    FSTYPE OPTIONS
+/boot  systemd-1 autofs rw,relatime,fd=93,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=8820
+error: loading sysroot: fstatat(boot/loader): Operation not permitted
+unshare-status-rc=1
+deploy-rc=0
+  default c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652.1 (staged)
+    origin refspec: c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652
+* default c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652.0
+    origin: <unknown origin type>
+ 01:50:32 up 6 min,  1 user,  load average: 0.12, 0.08, 0.02
+TARGET  SOURCE           FSTYPE OPTIONS
+/boot   systemd-1        autofs rw,relatime,fd=93,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=8820
+`-/boot /dev/vda3[/boot] xfs    ro,relatime,seclabel,inode64,logbufs=8,logbsize=32k,noquota
+  default c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652.1 (staged)
+    origin refspec: c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652
+* default c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652.0
+    origin: <unknown origin type>
+unshare-status-rc=0
+active
+BOOT_IMAGE=(hd0,gpt3)/boot/ostree/default-719f4a116b17b1ad4ab1e77a18beda8965bc5a5a61237248d7405cfa82f9c373/vmlinuz-7.2.15-200.fc44.x86_64 root=UUID=b31eeb2f-9212-4ca7-8fe7-b16dd88d7934 rw ostree=/ostree/boot.1/default/719f4a116b17b1ad4ab1e77a18beda8965bc5a5a61237248d7405cfa82f9c373/0
+* default c3a4e9570cb4da77d0c92236321add1b255d3f5f77a34fabaea186a27cd7e652.0
+    origin: <unknown origin type>
+Nov 05 01:43:47.063894 fedora systemd[1]: Set up automount boot.automount - EFI System Partition Automount.
+Nov 05 01:43:47.596420 fedora systemd[1]: Mounting boot.mount - /boot...
+Nov 05 01:43:47.611151 fedora systemd[1]: Mounted boot.mount - /boot.
+Nov 05 01:46:28.469957 fedora systemd[1]: Unmounting boot.mount - /boot...
+Nov 05 01:46:28.487265 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 01:46:28.487565 fedora systemd[1]: Unmounted boot.mount - /boot.
+Nov 05 01:47:16.653021 fedora systemd[1]: boot.automount: Got automount request for /boot, triggered by 2107 (ostree)
+Nov 05 01:47:16.654567 fedora systemd[1]: Mounting boot.mount - /boot...
+Nov 05 01:47:16.667334 fedora systemd[1]: Mounted boot.mount - /boot.
+Nov 05 01:47:16.748227 fedora systemd[1]: Starting ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment...
+Nov 05 01:47:16.759277 fedora systemd[1]: Started ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment.
+Nov 05 01:47:16.759832 fedora systemd[1]: Finished ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+Nov 05 01:50:32.260007 fedora systemd[1]: boot.automount: Deactivated successfully.
+Nov 05 01:50:32.260411 fedora systemd[1]: Unset automount boot.automount - EFI System Partition Automount.
+Nov 05 01:50:32.264498 fedora systemd[1]: boot.mount: Deactivated successfully.
+Nov 05 01:50:32.390776 fedora systemd[1]: Stopping ostree-finalize-staged.service - OSTree Finalize Staged Deployment...
+Nov 05 01:50:32.466288 fedora ostree[2217]: error: Remounting /boot read-write: Invalid argument
+Nov 05 01:50:32.468127 fedora systemd[1]: ostree-finalize-staged.service: Control process exited, code=exited, status=1/FAILURE
+Nov 05 01:50:32.468302 fedora systemd[1]: ostree-finalize-staged.service: Failed with result 'exit-code'.
+Nov 05 01:50:32.468586 fedora systemd[1]: Stopped ostree-finalize-staged.service - OSTree Finalize Staged Deployment.

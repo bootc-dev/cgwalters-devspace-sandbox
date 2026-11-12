@@ -1,0 +1,189 @@
+From 91b75637cd901458907f365a1fc8b4f20d4c73a2 Mon Sep 17 00:00:00 2001
+From: agent <agent@localhost>
+Date: Thu, 5 Nov 2026 01:20:05 +0000
+Subject: [PATCH 4/5] sysroot: Write /boot through a private writable mount
+ clone
+
+ostree-finalize-staged.service remounts /boot read-write at shutdown. When
+/boot is the generator's bind mount with an expired boot.automount on
+top, that fails with "Remounting /boot read-write: Invalid argument",
+and the staged deployment is silently dropped.
+
+Instead, have _ostree_sysroot_ensure_writable() make boot_fd a directory
+fd for a detached clone of the boot mount: open_tree(OPEN_TREE_CLONE) of
+the path booted_boot_path() picks, and mount_setattr() to clear
+MOUNT_ATTR_RDONLY on that clone only. Nothing in any mount namespace
+changes, and nothing that later happens at /boot, such as an automount
+expiring, affects the clone. The directory fd is reopened from the
+O_PATH tree fd because syncfs() and FIFREEZE need a real fd.
+
+The clone is opened by the finalizing process itself, rather than handed
+over from the finalize-staged --hold process. The systemd fd store only
+gives fds back to the unit that stored them, and the hold and finalize
+units are different; making the holder do the finalization changes the
+shutdown ordering the two units exist for; passing the fd with
+pidfd_getfd() or SCM_RIGHTS adds IPC and SELinux policy surface. Since
+the clone is taken from /sysroot/boot when /boot is on the physical root,
+it doesn't depend on what is at /boot when finalization runs.
+
+Without the new mount API (ENOSYS before Linux 5.2 and 5.12, or EPERM
+from an older seccomp filter), or when the filesystem itself is
+read-only, e.g. a separate /boot mounted ro, fall back to remounting as
+before.
+
+/boot is still remounted read-write as well, because the path-based
+bootloader backends (grub2-mkconfig, syslinux, uboot, zipl, aboot) write
+through /boot. A remount failure is only fatal when boot_fd isn't
+writable on its own; otherwise it is logged once.
+
+Related: https://github.com/bootc-dev/bootc/issues/2402
+
+Assisted-by: https://github.com/cgwalters/cgwalters#llms
+---
+ src/libostree/ostree-sysroot-private.h |  2 +
+ src/libostree/ostree-sysroot.c         | 99 ++++++++++++++++++++++++--
+ 2 files changed, 96 insertions(+), 5 deletions(-)
+
+diff --git a/src/libostree/ostree-sysroot-private.h b/src/libostree/ostree-sysroot-private.h
+index c8640de0..e7612e3c 100644
+--- a/src/libostree/ostree-sysroot-private.h
++++ b/src/libostree/ostree-sysroot-private.h
+@@ -73,6 +73,8 @@ struct OstreeSysroot
+   // Set if the /boot filesystem is VFAT.
+   // Only initialized if boot_fd is set.
+   gboolean boot_is_vfat;
++  // Set if remounting /boot writable failed, though boot_fd is writable.
++  gboolean boot_remount_failed;
+   // Lock for this sysroot.
+   GLnxLockFile lock;
+ 
+diff --git a/src/libostree/ostree-sysroot.c b/src/libostree/ostree-sysroot.c
+index 66a0f11d..a4c6dc3e 100644
+--- a/src/libostree/ostree-sysroot.c
++++ b/src/libostree/ostree-sysroot.c
+@@ -240,7 +240,8 @@ ostree_sysroot_new_default (void)
+  * If this function has been called, then when a function which requires
+  * writable access is invoked, libostree will automatically remount as writable
+  * any mount points on which it operates.  This currently is just `/sysroot` and
+- * `/boot`.
++ * `/boot`; where the kernel supports it, libostree itself writes to `/boot`
++ * through a private writable clone of its mount instead.
+  *
+  * If you invoke this function, it must be before ostree_sysroot_load(); it may
+  * be invoked before or after ostree_sysroot_initialize().
+@@ -450,7 +451,62 @@ remount_writable (const char *path, gboolean *did_remount, GError **error)
+   return TRUE;
+ }
+ 
+-/* Remount /sysroot read-write if necessary */
++/* Open a detached clone of the mount at @path, clear its read-only flag, and
++ * return a directory fd for it in @out_fd. That fd is the only way to reach
++ * the clone: nothing changes in any mount namespace, and nothing done to the
++ * mounts at @path later (an automount expiring, say) affects it.
++ *
++ * If the kernel lacks the mount API, or the filesystem itself (and not just
++ * the mount) is read-only, @out_fd is left as -1 for the caller to fall back
++ * to remounting.
++ */
++static gboolean
++open_writable_mount_clone (const char *path, int *out_fd, GError **error)
++{
++  *out_fd = -1;
++#ifdef HAVE_OPEN_TREE
++  glnx_autofd int tree_fd = open_tree (AT_FDCWD, path, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC);
++  if (tree_fd < 0)
++    {
++      /* ENOSYS before Linux 5.2; EPERM from seccomp filters that predate it */
++      if (G_IN_SET (errno, ENOSYS, EPERM))
++        {
++          g_debug ("open_tree(%s): %s; falling back to remount", path, g_strerror (errno));
++          return TRUE;
++        }
++      return glnx_throw_errno_prefix (error, "open_tree(%s)", path);
++    }
++  struct mount_attr attr = { .attr_clr = MOUNT_ATTR_RDONLY };
++  if (mount_setattr (tree_fd, "", AT_EMPTY_PATH, &attr, sizeof (attr)) < 0)
++    {
++      /* ENOSYS before Linux 5.12 */
++      if (G_IN_SET (errno, ENOSYS, EPERM))
++        {
++          g_debug ("mount_setattr(%s): %s; falling back to remount", path, g_strerror (errno));
++          return TRUE;
++        }
++      return glnx_throw_errno_prefix (error, "mount_setattr(%s)", path);
++    }
++  struct statvfs stvfsbuf;
++  if (fstatvfs (tree_fd, &stvfsbuf) < 0)
++    return glnx_throw_errno_prefix (error, "fstatvfs(%s)", path);
++  if ((stvfsbuf.f_flag & ST_RDONLY) != 0)
++    {
++      g_debug ("%s is on a read-only filesystem; falling back to remount", path);
++      return TRUE;
++    }
++  /* open_tree() returns an O_PATH fd, which syncfs() and FIFREEZE don't
++   * accept. The directory fd holds its own reference to the clone, which
++   * stays usable after tree_fd is closed, as with a lazy unmount.
++   */
++  if (!glnx_opendirat (tree_fd, ".", TRUE, out_fd, error))
++    return FALSE;
++  g_debug ("using a writable clone of %s", path);
++#endif
++  return TRUE;
++}
++
++/* Remount /sysroot read-write if necessary, and make boot_fd writable */
+ gboolean
+ _ostree_sysroot_ensure_writable (OstreeSysroot *self, GError **error)
+ {
+@@ -474,15 +530,48 @@ _ostree_sysroot_ensure_writable (OstreeSysroot *self, GError **error)
+   gboolean did_remount_sysroot = FALSE;
+   if (!remount_writable ("/sysroot", &did_remount_sysroot, error))
+     return FALSE;
+-  gboolean did_remount_boot = FALSE;
+-  if (!remount_writable ("/boot", &did_remount_boot, error))
++
++  /* What this mount namespace has at /boot may not be the boot mount, or not be
++   * reachable at all (see booted_boot_path()), so write through a private clone
++   * of the boot filesystem. Without one, boot_path is still writable if it's a
++   * directory of the now writable /sysroot.
++   */
++  const char *boot_path = booted_boot_path ();
++  glnx_autofd int boot_fd = -1;
++  if (!open_writable_mount_clone (boot_path, &boot_fd, error))
+     return FALSE;
++  const gboolean have_writable_boot = boot_fd != -1 || !g_str_equal (boot_path, "/boot");
++
++  /* We write only through boot_fd, but bootloader backends that use paths or
++   * run tools such as grub2-mkconfig still write to /boot, so remount it as
++   * before; only fail on that if boot_fd needs it too.
++   */
++  gboolean did_remount_boot = FALSE;
++  g_autoptr (GError) remount_error = NULL;
++  if (!self->boot_remount_failed && !remount_writable ("/boot", &did_remount_boot, &remount_error))
++    {
++      if (!have_writable_boot)
++        {
++          g_propagate_error (error, g_steal_pointer (&remount_error));
++          return FALSE;
++        }
++      ot_journal_print (LOG_INFO, "Writing the boot filesystem via %s; %s", boot_path,
++                        remount_error->message);
++      /* We're called for every write; don't retry or log again */
++      self->boot_remount_failed = TRUE;
++    }
+ 
+   /* Now close and reopen our file descriptors */
+   ostree_sysroot_unload (self);
+   if (!ensure_sysroot_fd (self, error))
+     return FALSE;
+-  if (!_ostree_sysroot_ensure_boot_fd (self, error))
++  if (boot_fd != -1)
++    {
++      if (!validate_boot_fd (self, boot_fd, error))
++        return FALSE;
++      self->boot_fd = glnx_steal_fd (&boot_fd);
++    }
++  else if (!_ostree_sysroot_ensure_boot_fd (self, error))
+     return FALSE;
+ 
+   return TRUE;
