@@ -44,6 +44,25 @@ to run a subset. To run a single disk, use
 `--no-idle` for a control run that touches `/boot` and updates straight away.
 `node harness.mjs --help` lists the image and layout names.
 
+### Remaining 28854659 gaps
+
+From the repository root, fetch the immutable helper revision with
+`git fetch origin be7a48d763c67e018a6f2ccbae8ef4c2c15fd954`, then run
+`node work/boot-2402/remaining-gaps.mjs --test`. This focused driver uses that
+revision's pinned source build, not main's older moving-PR build path.
+Its state defaults to `/var/tmp/b2402-remaining` (`B2402_STATE` overrides it).
+Run `build`, then `idle` and `cleanup` to compare Fedora 44/45 stock/PR with
+default BIOS/UEFI installs and explicit XFS/Btrfs. Run `build-centos`, then
+`cleanup-centos` for Stream 9/10 root-layout cleanup controls on BIOS/UEFI.
+`report` checks the Fedora saved results and before/after cleanup inventories;
+`report-cleanup` checks only Fedora cleanup; `report-centos` checks CentOS cleanup.
+Add `--verbose` to a report for payload paths, deployment checksums and hashes.
+The idle batch intentionally exits nonzero for failing stock controls.
+Cleanup inventories mount the actual ESP read-only in a private namespace and
+resolve recursive boot slot links. They do not prove old-kernel removal when
+updates share a kernel. Use fresh state for a new image build; test commands
+overwrite their disposable run overlays and results, so preserve evidence first.
+
 `matrix --filter` matches the full run ID, including its firmware suffix.
 For example, the remaining PR 55 BIOS rows were selected with
 `--filter 'centos-bootc-9--pr3690--(default-bios|root|root-fstab-esp)--bios$'
