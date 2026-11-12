@@ -1,0 +1,36 @@
++ rpm -q ostree systemd
+ostree-2026.4-1.fc44.x86_64
+systemd-259.10-1.fc44.x86_64
++ findmnt /
+TARGET SOURCE    FSTYPE  OPTIONS
+/      composefs overlay ro,relatime,seclabel,lowerdir+=/run/ostree/.private/cfsroot-lower,datadir+=/sysroot/ostree/repo/objects,redirect_dir=on,metacopy=on
++ findmnt -R /boot
+TARGET  SOURCE           FSTYPE OPTIONS
+/boot   systemd-1        autofs rw,relatime,fd=93,pgrp=1,timeout=120,minproto=5,maxproto=5,direct,pipe_ino=10429
+`-/boot /dev/vda3[/boot] xfs    ro,relatime,seclabel,inode64,logbufs=8,logbsize=32k,noquota
++ systemctl list-units 'boot*' --all --no-pager --plain
++ head -4
+UNIT                               LOAD   ACTIVE   SUB     DESCRIPTION
+boot.automount                     loaded active   running EFI System Partition Automount
+boot.mount                         loaded active   mounted /boot
+bootc-status-updated.path          loaded active   waiting Monitor bootc for status changes
++ mkdir -p /run/g
++ SYSTEMD_LOG_LEVEL=debug
++ /usr/lib/systemd/system-generators/systemd-gpt-auto-generator /run/g /run/g /run/g
++ tail -6
+Probed fstype 'xfs' on partition /dev/disk/by-diskseq/1-part3.
+Loaded shared library 'libmount.so.1' via dlopen().
+Not an EFI boot, skipping loader partition UUID check.
+Adding /boot: /dev/disk/by-diskseq/1-part2 fstype=vfat
+Root partition not marked for growing the file system in the GPT partition table, not generating drop-in for systemd-growfs-root.service.
+Parameter ro/rw specified on kernel command line, not generating drop-in for systemd-remount-fs.service.
++ ls /run/g
+boot.automount
+boot.mount
+local-fs.target.wants
++ ls -l /run/systemd/volatile-root
+lrwxrwxrwx. 1 root root 16 Nov  5 02:54 /run/systemd/volatile-root -> /dev/block/253:3
++ stat -c '%d %D' / /usr /sysroot
+37 25
+37 25
+64771 fd03
