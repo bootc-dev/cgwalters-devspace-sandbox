@@ -1,100 +1,55 @@
-# cgwalters-devspace
+# cgwalters-devspace-sandbox
 
-This repository dispatches a bounded, disposable RHEL 10 development runner.
-Tailscale supplies private networking inside the remote workflow; access is
-ordinary OpenSSH as user `runner`.
+The core idea: You want to do software development in an environment
+that matches your CI.
 
-## Prerequisites
+And in the age of agentic AI, you want to [align your CI and AI](https://blog.verbum.org/2026/08/21/agentic-ai-and-software-forges/).
 
-Install Rust/Cargo 1.85 or newer. The `cargo devspace` alias is defined in this
-repository's `.cargo/config.toml` and is local to this checkout. Authenticate
-the GitHub CLI (`gh auth login`) with permission to dispatch, view, and cancel
-this repository's workflows. The `ssh` and `ssh-keygen` commands must also be
-available.
+The idea behind this repository is simple: it's a playground that
+can be force-pushed to arbitrarily and acts as the "dev space" for
+one particular human (in this case, cgwalters).
 
-An administrator must configure repository variables `TS_OAUTH_CLIENT_ID` and
-`TS_AUDIENCE`. The federated Tailscale identity needs writable `auth_keys`, the
-`tag:bootc-dev-sandbox` tag, and network ACL access from your device to that tag
-on TCP port 22. No repository secret or OAuth client secret is used.
-The client must be connected to the relevant Tailscale network with MagicDNS
-access. The Rust tool uses ordinary OpenSSH and does not invoke the local
-Tailscale CLI, inspect Tailscale status, or use a local Tailscale socket.
+There's a few bits of code you might find useful in this repository, but
+the key thing is just the *ideas*. See below.
 
-## Use
+## Use cases
 
-`cargo devspace` has exactly four commands:
+### Use case: Test CI workflows outside of a PR
 
-```console
-cargo devspace start --duration 240 --cores 16
-cargo devspace list
-cargo devspace ssh RUN_ID
-cargo devspace stop RUN_ID
-```
+Testing changes to CI by force pushing to a PR spams repository notifications.
+Instead of that, force reset the `main` of your devspace to the target repository
+you're working on, and then submit PRs against that instead.
 
-`start` generates an ephemeral Ed25519 key, records it privately under
-`${XDG_STATE_HOME:-$HOME/.local/state}/devspace` (using XDG_STATE_HOME only when
-it is a nonempty absolute path), dispatches the workflow, and
-prints the exact run ID and URL. It does not wait for readiness or cancel the
-runner. `ssh` repeatedly probes the deterministic MagicDNS hostname
-`cgwalters-devspace-RUN_ID` while the workflow is active, then opens interactive
-OpenSSH with that key. `stop` acts only on the given development run and removes
-its local key after cancellation or after confirming that the run has already
-completed. `list` shows active dispatched-run metadata: run ID, status, title,
-and URL.
+Once that works, then do the PR against the actual repository.
 
-The duration choices are 30, 60, 120, and 240 minutes (the default); the
-workflow's 270-minute timeout allows setup plus the full four-hour lifetime.
-Use `--cores 4`, `--cores 16` (the default), or `--cores 64` to select a runner
-size. The runner is disposable: do not store secrets on it.
-`runner-sizes.json` records the corresponding runner labels.
+### Use case: remote development target
 
-If dispatch cannot be correlated, the CLI retains the pending private key and
-identifies its session so the run can be located manually.
+GitHub supports `workflow_dispatch` to start a runner outside of an event (like a PR).
 
-The workflow runs stock `sshd.service`, binds it only to the Tailscale IPv4
-address, and enforces a public-key-only configuration. Its keepalive verifies
-the service, SELinux context, and bound address every five seconds.
+A generalization of this is *interactive login* to work on code.
+GitHub [codespaces](https://github.com/features/codespaces) are a first
+class thing on GitHub, but have their own costs and semantics.
 
-The runner hosts [cgwalters-bot](https://github.com/cgwalters-bot) agent
-sessions. Before OpenSSH is made available, it automatically installs the bot's
-[homegit](https://github.com/cgwalters-bot/homegit) dotfiles, skills, and agent
-configuration. Because the runner executes homegit code, it is pinned to the
-commit in the `Justfile`'s `homegit_rev`, which Renovate bumps through
-reviewed pull requests. The checkout is created at
-`$HOME/src/github/cgwalters-bot/homegit` when absent, and existing checkouts
-are moved to the pinned commit, fetching it if needed. Interactive users on the
-runner therefore get the bot's git identity from its `.gitconfig`.
+In this repository, I have a workflow where the repository has an
+oauth token that allows access to my personal [Tailnet](https://tailscale.com/);
+the runner is accessible via ssh from my personal machines.
 
-The opencode and Claude Code agent CLIs are preinstalled globally with npm
-(from the RHEL `nodejs` package). Their exact versions are pinned in `npm.txt`,
-which Renovate keeps current via the shared bootc-dev configuration. The
-GitHub CLI, which the bot's tools call for every GitHub operation, comes from
-EPEL. Agent credentials are not provisioned, so `gh` is not logged in.
+So then it's easy to do any hybrid you want - test some GHA YAML and then listen
+on SSH, or just have it be "listen on SSH".
 
-## Agent runs
+### Use case: Agent-driven remote development target
 
-`.github/workflows/agent.yml` runs an unattended
-[agentic-job](https://github.com/cgwalters-forge/agentic-job) agent on the same
-RHEL 10 runners, through the shared
-`cgwalters-forge/actions` wrapper (`cgwalters-agentic-job.yml`):
+The next obvious generalization of this is: Give agentic AI to do all of
+the above; the agent runs e.g. on your local machine, but can do the heavy
+lifting on an ephemeral remote environment. It works really well.
 
-```console
-gh workflow run agent.yml --ref main -f repo=bootc-dev/bootc -f item=1234 \
-  -f kind=research -f pool=claude -f cores=16 -f task='...'
-```
+### Use case: Agent-in-runner
 
-The repositories a run may target are in `.github/agentic-job/dispatch.toml`,
-the agent pools in `pools.json` there, and the runner configuration (the
-services stopped, the packages installed for VM work) in `rhel10.toml`.
-`-f agent=fake` runs the scripted agent instead, with no inference or tailnet,
-and `-f config=rhel10-kvm-smoke` additionally boots a VM as the sandbox user
-with `qemu:///session` and passt during setup, a shakedown of the runner.
+A stricter evolution of the above is running the agent *in* the remote
+environment. For more on this, see e.g. [agentic-job](https://github.com/cgwalters-forge/agentic-job/).
 
-Applying a pull request (`implement`) takes the `SAFE_OUTPUTS_PAT` secret
-in the `agent-apply` environment, which an administrator must create; a
-comment on an issue of this repository needs only the job token.
+## Code
 
-## TODO / roadmap
+There's a small CLI in repository which adds a CLI usable by humans or
+agents that abstracts over how this works, but is not required at all.
 
-- Later, support launching an agent that can work autonomously and push changes
-  with safe, scoped credentials, while preserving interactive access.
