@@ -1,0 +1,14 @@
+diff --git a/tests/kolainst/destructive/auto-prune.sh b/tests/kolainst/destructive/auto-prune.sh
+--- a/tests/kolainst/destructive/auto-prune.sh
++++ b/tests/kolainst/destructive/auto-prune.sh
+@@ -59,7 +59,9 @@ if test $((${total_blocks} * ${block_size})) -lt ${required_bootdata_size}; then
+     bootimg=/var/tmp/boot.img
+     truncate -s ${required_bootdata_size} ${bootimg}
+     # Be sure to mirror existing block size
+-    mkfs.ext4 -b ${block_size} ${bootimg}
++    # e2fsprogs 1.47.4 can default to an orphan file larger than the
++    # kernel's 512-block limit on 1 KiB filesystems. Keep it within that limit.
++    mkfs.ext4 -b ${block_size} -E orphan_file_size=512K ${bootimg}
+     mount -o loop ${bootimg} /var/mnt
+     # Copy existing boot data
+     cp -a /boot/* /var/mnt
