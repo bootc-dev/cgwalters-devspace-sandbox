@@ -4,11 +4,229 @@
 
 ## Five-line verdict (28854659 consolidated, 2026-11-12)
 
-1. 28854659 fixes all eight observed idle-before-stage reproductions: Fedora 44/45 root BIOS/UEFI, Stream 9 root BIOS, Stream 9/10 default BIOS and Stream 10 root BIOS; each has a failing stock control.
+1. 28854659 fixes all 16 observed idle-before-stage layout/firmware cases, including eight new Fedora 44/45 default-layout cases with explicit XFS/Btrfs on BIOS/UEFI; every fixed case has a failing stock control.
 2. Completed immediate-reboot and fstab-layout comparisons pass; completed lifecycle rows verify namespace status without EPERM, rollback and two updates, and Stream 10 passes all 13 integration tests.
-3. Corrected cleanup commands pass on Stream 10 BIOS and completed Fedora 44/45/Stream 9 lifecycle rows; retained kernel files are referenced, but ESP, recursive deployment-link and old-kernel removal coverage remain incomplete.
+3. All 24 new matched cleanup runs (Fedora 44/45 default XFS/Btrfs and Stream 9/10 root, BIOS/UEFI) pass recursive ESP and /boot reference checks with no orphaned entries/kernels/initramfs; superseded-kernel removal remains unexercised.
 4. Staged soft reboot finalizes but does not select the update on both stock and PR in matched Fedora 44/Stream 10 BIOS runs: this limitation is not PR-specific, not a pass.
 5. Post-stage `finalize-staged --hold` keeps `/boot` mounted in stock and PR: all eight 600-second waits boot the staged deployment, but actual post-stage expiry remains unobserved; outstanding coverage prevents an all-cases/no-regressions merge verdict.
+
+## Remaining-gap validation continuation (2026-11-12)
+
+Read the consolidated findings before starting. Previous VM state is absent;
+this batch uses fresh `/var/tmp/b2402-remaining`. The focused driver
+`remaining-gaps.mjs` imports the immutable PR 62 harness (including its exact
+28854659 source build), adds four explicit-filesystem default layouts, and
+does not import main's older moving-PR build path. It preserves installer fstab
+policy and runs `to-disk` without `--generic-image` under each named firmware.
+These are **default layouts with an explicit filesystem**, not the earlier
+no-filesystem-policy Fedora install failures.
+
+Commands from the repository root:
+
+```console
+git fetch origin be7a48d763c67e018a6f2ccbae8ef4c2c15fd954
+node --check work/boot-2402/remaining-gaps.mjs
+node work/boot-2402/remaining-gaps.mjs --test
+node work/boot-2402/remaining-gaps.mjs build
+```
+
+Syntax and historical-source transformation checks passed. The first build
+was interrupted at the host tool's 200-second timeout during the Fedora 44
+source build, not during a test scenario. A detached retry completed all 16
+installs; the subsequent cached build command exits 0. An accidental overlapping
+retry was rejected by qemu-img's write lock before changing a disk; the active
+builder was allowed to finish. No failed/interrupted attempt counts as a test.
+
+Started `node work/boot-2402/remaining-gaps.mjs idle` and
+`node work/boot-2402/remaining-gaps.mjs cleanup` concurrently at 12:58:19 UTC,
+each with eight disposable VM overlays at a time. All 16 cleanup scenarios
+completed by 13:05:54 UTC: first update booted, distinct second update booted,
+`ostree admin cleanup` and `bootc internals cleanup` returned zero. Cleanup
+runs deliberately skip idle waits so stock reaches both updates; they are not
+the failing idle controls. Fedora 44's four idle controls fail and its four
+PR cases pass; Fedora 45's four idle controls also fail and its four PR cases
+pass. All 16 idle runs staged successfully on the first attempt, after a
+witnessed idle-out. No run observed post-stage idle-out within 240 seconds.
+The idle command deliberately exits 1 for its failing stock controls; the
+saved-observation `report` exits 0 only after verifying those eight expected
+failures, eight PR successes and all 16 cleanup inventories.
+The idle scenarios completed by 13:13:54 UTC. Their driver exits later because
+the historical VM stop helper leaves its 180-second timeout promises pending.
+
+### Explicit-filesystem default-layout comparisons
+
+Idle seconds below are stock / PR **before staging**. Every stock FAIL has
+`stageExit=0`, shutdown finalization error EINVAL, and absent update marker
+after reboot; every PR PASS finalizes and boots the update. The cleanup row
+uses separate no-idle overlays, not a retry of a failed idle run.
+
+| image | default-layout filesystem | firmware | scenario | stock | 28854659 | idle seconds |
+|---|---|---|---|---|---|---|
+| fedora-bootc:44 | xfs | BIOS | idle-before-stage | FAIL | PASS | 150 / 150 |
+| fedora-bootc:44 | btrfs | BIOS | idle-before-stage | FAIL | PASS | 145 / 145 |
+| fedora-bootc:44 | xfs | UEFI | idle-before-stage | FAIL | PASS | 150 / 150 |
+| fedora-bootc:44 | btrfs | UEFI | idle-before-stage | FAIL | PASS | 150 / 145 |
+| fedora-bootc:45 | xfs | BIOS | idle-before-stage | FAIL | PASS | 151 / 151 |
+| fedora-bootc:45 | btrfs | BIOS | idle-before-stage | FAIL | PASS | 151 / 151 |
+| fedora-bootc:45 | xfs | UEFI | idle-before-stage | FAIL | PASS | 151 / 151 |
+| fedora-bootc:45 | btrfs | UEFI | idle-before-stage | FAIL | PASS | 151 / 151 |
+| fedora-bootc:44, :45 | xfs, btrfs | BIOS, UEFI | two updates + recursive cleanup inspection | PASS (8 runs) | PASS (8 runs) | no idle wait |
+
+All eight failures have this short excerpt (same commands and signature in
+each run's `evidence.txt`):
+
+```text
+$ bootc switch --quiet --transport oci-archive /var/tmp/b2402-next.ociarchive
+[exit 0]
+$ journalctl -b -1 -o short-monotonic --no-pager -u ostree-finalize-staged.service -u ostree-finalize-staged-hold.service
+ostree[PID]: error: Remounting /boot read-write: Invalid argument
+systemd[1]: ostree-finalize-staged.service: Failed with result 'exit-code'.
+$ test -e /usr/share/b2402/next
+[exit 1]
+```
+
+For each failure, the exact run directory is
+`runs/fedora-bootc-VERSION--stock--default-FW-FS--FW/`. Substituting the table's
+version, lower-case firmware and filesystem names identifies the full evidence.
+The error PIDs in table order are `2987`, `2986`, `3004`, `2995`, `3009`,
+`3012`, `3012`, `3012` (separate VMs). Reproduce the batch with
+`node work/boot-2402/remaining-gaps.mjs idle`; use fresh state plus `build` to
+rebuild. Unlike `root`, none of these default-layout installs rewrites fstab
+or uses `--generic-image`. All installed guests have `/boot` on root and no
+boot/ESP fstab entries, including the Btrfs installations.
+
+### Recursive cleanup inspection
+
+`node work/boot-2402/remaining-gaps.mjs report-cleanup` exits 0 after checking
+all 16 before/after inventories. It verifies two loader entries, each naming
+an existing kernel and initramfs and resolving a deployment slot to one of the
+two retained deployments. Every retained deployment is selected by an entry.
+There are no additional loader entry files or unreferenced kernel/initramfs
+files anywhere in the recursive `/boot` and actual ESP inventories. Hashes and
+these references are unchanged across cleanup: ordinary update finalization
+had already removed obsolete deployment artifacts before explicit cleanup.
+Thus this is an idempotent-cleanup/no-leftovers observation, not evidence that
+the explicit cleanup commands themselves deleted a file.
+
+The ESP is found by its GPT type and mounted `ro,nosuid,nodev,noexec` in a
+private mount namespace, independently of fstab or `/boot/efi`. All BIOS ESPs
+are genuinely empty. UEFI ESPs contain only nine boot-loader payload/config
+files: `EFI/BOOT/{BOOTX64.EFI,fbx64.efi}` and
+`EFI/fedora/{BOOTX64.CSV,bootuuid.cfg,grub.cfg,grubx64.efi,mmx64.efi,shim.efi,shimx64.efi}`.
+There are no ESP loader entries, kernels or initramfs files. Static GRUB/shim
+payloads are not obsolete deployment artifacts. Both variants have the same
+inventory pattern. `find -H /sysroot/ostree/boot.*` traverses the top-level
+symlinks and `readlink -e` resolves the slot links; this closes the earlier
+one-level-listing limitation. `report-cleanup` fails on missing references or
+extra payloads, rather than equating successful commands with an orphan check.
+
+All Fedora 44 runs retain one shared kernel directory
+`ostree/default-07d392716d6a6beca1b2fc55e680e0b3c184e722674619460f124751416c8fd7`
+for kernel `7.3.3-200.fc44.x86_64`; Fedora 45 retains
+`ostree/default-a89028e21b88b88870873951ecadf31422cb5c7e6eb846e88445d978cd85b2d8`
+for `7.3.3-300.fc45.x86_64`. Each contains vmlinuz, its `.hmac` companion and
+initramfs, shared by `loader.0/entries/ostree-{1,2}.conf`. The `.hmac` files
+are not orphans. The updates change image content, not kernel versions;
+**removal of a superseded kernel remains unexercised**.
+
+Representative Fedora 44 PR BIOS/XFS evidence:
+`runs/fedora-bootc-44--pr3690-28854659--default-bios-xfs--bios--noidle--cleanup/evidence.txt:2686–2744`
+has `ostree=/ostree/boot.0/default/07d39271…/0` resolving to deployment
+`66ecafdbefa3b10368baaf6b71e869e58544f854e3d2d94300c2cd74b6e25c14.0`
+and `/1` resolving to
+`74f7181c76cf8d19136f5ae1368e64951bb7a26ac496be812e138377dd2fe431.0`.
+These are exactly the two retained deployment directories. Its kernel SHA-256
+is `e57beeb6367ba2c745c1336feccc51cc4b24339f7b94a5299d7e51849ef6d69f`,
+initramfs `23cd984077b625ca1fb86489aeb3421c1f2e0591d73ab866e6b83fdb7d45dbea`.
+These hashes agree across all eight Fedora 44 cleanup runs.
+
+### Stream 9/10 matched cleanup controls
+
+The additional build and cleanup batch completed successfully:
+
+```console
+node work/boot-2402/remaining-gaps.mjs build-centos
+node work/boot-2402/remaining-gaps.mjs cleanup-centos
+node work/boot-2402/remaining-gaps.mjs report-centos
+```
+
+The eight cleanup overlays ran 13:19:53–13:23:01 UTC. The saved-observation
+report exits 0, applying the same before/after reference and hash checks as
+Fedora. Each variant booted the first and distinct second image, both cleanup
+commands returned zero, and each inventory contains exactly two loader entries
+and one shared kernel/initramfs set (plus kernel HMAC), resolving to exactly
+two retained deployments. No orphaned entries, kernels or initramfs files were
+found under `/boot` or on the independently mounted ESP. Inventories and hashes
+were already clean before explicit cleanup and are unchanged afterward.
+
+| image | layout | firmware | scenario | stock | 28854659 |
+|---|---|---|---|---|---|
+| centos-bootc:stream9 | root (XFS) | BIOS | two updates + recursive cleanup inspection | PASS | PASS |
+| centos-bootc:stream9 | root (XFS) | UEFI | two updates + recursive cleanup inspection | PASS | PASS |
+| centos-bootc:stream10 | root (XFS) | BIOS | two updates + recursive cleanup inspection | PASS | PASS |
+| centos-bootc:stream10 | root (XFS) | UEFI | two updates + recursive cleanup inspection | PASS | PASS |
+
+Unlike Fedora's firmware-specific default installs, these `root` disks use
+`--generic-image`, preserving the historical root-layout setup. On both
+firmwares each ESP contains ten static boot-loader files: the two `EFI/BOOT`
+files listed above, plus `EFI/centos/{BOOTX64.CSV,bootuuid.cfg,grub.cfg,grubx64.efi,mmx64.efi,shim.efi,shimx64-centos.efi,shimx64.efi}`.
+None is an obsolete deployment artifact. There are no ESP loader entries or
+kernel/initramfs payloads. Stream 9 retains kernel `5.14.0-764.el9.x86_64` in
+`ostree/default-8df7c90a176073f1cff7d42587b92b2890af7657c8164babf30b17f899aaca1e`;
+Stream 10 retains `6.12.0-283.el10.x86_64` in the historical `default-bb80258c…`
+directory. Each pair of entries selects slots `/0` and `/1` in that directory's
+boot checksum. Kernel/initramfs SHA-256 values agree across both variants and
+firmwares: Stream 9 `8032cc441d199a0a928adc5869b2cb65452780d22c234cb4840846c456ee12a6` /
+`9f21292e15e2ce20b2ad26e2e83aec71a144155d4a20eec85f852154cf92ff23`;
+Stream 10 `19cd5bb21de0efa8141709e5522c4ed54163e160e26f9a7fc773f083427b2cb1` /
+`3621cb8c7e40d7fb48fb47ae092bd98a051a8ea07fdb8e7216e08c99fc70fa74`.
+
+Evidence uses `runs/centos-bootc-VERSION--VARIANT--root--FW--noidle--cleanup/`:
+`evidence.txt`, `before-recursive-inventory.json`, `after-recursive-inventory.json`
+and `result.json`. As with Fedora, these updates share a kernel; this closes
+recursive ESP/slot inspection, not superseded-kernel deletion coverage.
+
+### Fresh-build provenance
+
+Builder manifest SHA-256 digests from `next/*.ociarchive.provenance.txt`
+(base / installed / first update). These are not the guest OCI-import digest.
+
+| image / variant | base | installed | first update |
+|---|---|---|---|
+| Fedora 44 stock | `f0c38422a69f34f902b176d84f3379c19448b4f5cf54c94d1e65929fe30b2297` | `f0c38422a69f34f902b176d84f3379c19448b4f5cf54c94d1e65929fe30b2297` | `039da3667e5b327e527354296609e8742f31d28ae59a3c7dad2aae1e3e3b0afb` |
+| Fedora 44 PR | `7efdf3078b4718a56763a61dd17a8d9eec0972d0e902d164984fde9cbcfabed5` | `7e5447d55c451d313747f20dbfd9e60114be4f0838e0d189dd19cd8374d4981a` | `3b351afae327bf4707b54502201fafe1ddc3ca81007c093bb4fb5c35618ebaa4` |
+| Fedora 45 stock | `2b4bdfb315e217ffc62505f232c7af3e946c63e7415988fe700715b6c653935e` | `2b4bdfb315e217ffc62505f232c7af3e946c63e7415988fe700715b6c653935e` | `3be8911767ed2616a3d08afc8648ba2395fcfa31294f11699fea60b6b8d37f2d` |
+| Fedora 45 PR | `056aaa1c51c47e475d99b44a0ee61431348e4e74322f3562667789c87719a0db` | `2e5f1c7b706a4988fef9474f99110bbf29207fd51ba9a88a693d2d3afd7913d5` | `e17e18e3e3f442dfd327ac9c16157b744dadf8fbd4d60e1292a15b3c7f3823fd` |
+| Stream 9 stock | `541a354b942ec1e1dbd73026616bcc79e5d088fbc7f44e5aa8fcec0637fd8d09` | `541a354b942ec1e1dbd73026616bcc79e5d088fbc7f44e5aa8fcec0637fd8d09` | `2532e865ed29effbe32fc34c7b4b99a164ca80b5381d85a1f3ade5c1944d9579` |
+| Stream 9 PR | `40335dcc4dcfe3e55d986e26fc7e64745100c702c675bf4deb423285f56bc6db` | `86f2f690f36294c1b8eda162d5a05568810574d33d8d51b96cd3f139a4a094f8` | `0feb3b1d6a0c7be1c6bd276beea56afa95e4f80f80b4ff56aba88de35397c0da` |
+| Stream 10 stock | `fffc6175f266f617c1b98660f62408aa7a98bb60d428cadaf37943d6ce2350d9` | `fffc6175f266f617c1b98660f62408aa7a98bb60d428cadaf37943d6ce2350d9` | `6eecc2182e366d68d183081c2c0f67e3ba82e4782da5871573e8ed35e615dd0a` |
+| Stream 10 PR | `f5f4ba4fc7695dbea4577fd79f09043beb2e12fd487cbbb7027998fa0599e1cd` | `464baa25f8baaa6f8c76c20009f0242ad39c95d5e8bba331eb65bb831b9d0f32` | `a5467e1719fc350697c20435a58e2febf5c5d79798d624a7449adaa2684f0e16` |
+
+The stock/PR base image IDs match within each Fedora pair:
+`47b38713cefd9c22c20d2b25081b31566b221c8663837ae8dd5f994175ab6218`
+(44) and `142be9fa79bdf6c2d65f54f5e506813c90d59a60fdb38cdccdbf2b0b117ae14b`
+(45), despite different manifest representations. These are not
+identical-manifest comparisons. Both source builds record head
+`288546598d115aadb49d134a1b8a6c2a04d6fe88`; PR executable hashes match the
+historical Fedora hashes, `acf44522e3d02261dd14f41a757e7f5af14e0f7b2add185b2576182f8d88ed37`
+and `07de2ab449183aba42bae9a443d474f2277b6993dbc74d455da1349ebd2e8b06`.
+Live base tags/dependency repositories are not pinned inputs for a future
+rebuild. The source overlay also includes upstream changes beyond PR 3690
+relative to stock 2026.4; these comparisons cannot isolate the PR alone.
+Stream 9/10 base IDs and PR executable hashes match the historical identities
+recorded below (respectively `6ece384e…` / `4462c7a3…` and `58583d0d…` /
+`f8f4c156…`), and both new source builds record the same full pinned head.
+
+**Batch verdict:** both requested batches are complete: eight new matched
+idle-before-stage comparisons and 24 matched two-update cleanup inventories.
+No new PR regression was observed. The explicit-filesystem Fedora default
+gap and recursive ESP/slot inspection gap are closed for the rows above;
+this does not add recursive cleanup coverage for every fstab/XBOOTLDR layout.
+Actual post-stage expiry and deletion of a superseded kernel remain untested,
+so the broader all-cases/no-regressions merge verdict is still withheld.
+No further VM scenarios were started. Full local VM state is not published;
+the necessary findings, failure signatures and provenance are recorded here.
+Changes remain uncommitted and unpushed under this run's handback rules.
 
 ## Consolidation sources and scope
 
