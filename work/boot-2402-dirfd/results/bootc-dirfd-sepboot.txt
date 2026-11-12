@@ -1,0 +1,77 @@
+### 0-info
+libostree:
+ Version: '2026.7'
+ DevelBuild: yes
+bootc 1.17.1
+NAME    SIZE FSTYPE PARTTYPENAME        MOUNTPOINTS
+sr0    1024M                            
+vda      30G                            
+|-vda1    1M        BIOS boot           
+|-vda2  512M vfat   EFI System          
+|-vda3    1G ext4   Linux filesystem    /boot
+`-vda4 28.5G xfs    Linux root (x86-64) /var
+                                        /sysroot/ostree/deploy/default/var
+                                        /sysroot
+                                        /etc
+UUID=74148a6b-03c2-4c1d-a531-2d1b7eef3aa1 /boot auto ro 0 0
+none
+Enforcing
+### 1-before-stage
+Mon Nov  9 01:27:32 UTC 2026
+TARGET SOURCE    FSTYPE OPTIONS
+/boot  /dev/vda3 ext4   ro,relatime,seclabel
+active
+inactive
+inactive
+### 2-stage
+bootc status: rc=0
+* default 0bbd8486e3a9b310324d1de5727334d020eeb6b1d4010ddac12145102abacb2b.0
+    origin: <unknown origin type>
+ostree admin status: rc=0
+kargs edit-in-place: rc=0
+deploy --stage: rc=0
+### 3-before-reboot
+Mon Nov  9 01:30:08 UTC 2026
+TARGET SOURCE    FSTYPE OPTIONS
+/boot  /dev/vda3 ext4   ro,relatime,seclabel
+active
+inactive
+active
+### 4-check
+BOOT_IMAGE=(hd0,gpt3)/boot/ostree/default-370160b2730013d8955182ae19354e1bce68a4fff17dfe8ad221793a5743eb3a/vmlinuz-7.2.15-200.fc44.x86_64 root=UUID=233e061d-820d-4c55-bd83-6e47e7bf25d7 rw boot=UUID=74148a6b-03c2-4c1d-a531-2d1b7eef3aa1 console=ttyS0 ostree=/ostree/boot.0/default/370160b2730013d8955182ae19354e1bce68a4fff17dfe8ad221793a5743eb3a/0 spike.marker=1
+RESULT: staged deployment booted
+system_u:object_r:boot_t:s0 ostree-1.conf
+system_u:object_r:boot_t:s0 ostree-2.conf
+/boot/loader/entries/ostree-1.conf:options root=UUID=233e061d-820d-4c55-bd83-6e47e7bf25d7 rw boot=UUID=74148a6b-03c2-4c1d-a531-2d1b7eef3aa1 console=ttyS0 ostree=/ostree/boot.0/default/370160b2730013d8955182ae19354e1bce68a4fff17dfe8ad221793a5743eb3a/1 spike.interactive=1
+AVC denials in previous boot: 0
+[    6.153302] fedora systemd[1]: Mounting boot.mount - /boot...
+[    6.222190] fedora systemd[1]: Mounted boot.mount - /boot.
+[  167.125118] fedora systemd[1]: Starting ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment...
+[  167.143808] fedora systemd[1]: Started ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment.
+[  167.144391] fedora systemd[1]: Finished ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+[  323.462905] fedora systemd[1]: Stopping ostree-finalize-staged.service - OSTree Finalize Staged Deployment...
+[  323.554700] fedora ostree[2194]: Finalizing staged deployment
+[  324.157593] fedora ostree[2194]: Copying /etc changes: 3 modified, 0 removed, 14 added
+[  324.157797] fedora ostree[2194]: Copying /etc changes: 3 modified, 0 removed, 14 added
+[  324.170141] fedora ostree[2194]: Refreshing SELinux policy
+[  325.542880] fedora ostree[2194]: Refreshed SELinux policy in 1372 ms
+[  325.550770] fedora ostree[2194]: Finalized deployment
+[  325.551326] fedora ostree[2194]: bootfs is sufficient for calculated new size: 0 bytes
+[  325.800171] fedora ostree[2194]: Starting syncfs for system repo
+[  325.806373] fedora ostree[2194]: Completed syncfs() for system repo in 6 ms
+[  325.806391] fedora ostree[2194]: Starting freeze/thaw cycle for boot
+[  325.822885] fedora ostree[2194]: Completed freeze/thaw cycle for boot in 16 ms
+[  325.822931] fedora ostree[2194]: Starting freeze/thaw cycle for boot
+[  325.825473] fedora ostree[2194]: Completed freeze/thaw cycle for boot in 3 ms
+[  325.825546] fedora ostree[2194]: Bootloader updated; bootconfig swap: yes; bootversion: boot.0.1, deployment count change: 1
+[  325.825638] fedora ostree[2194]: Bootloader updated; bootconfig swap: yes; bootversion: boot.0.1, deployment count change: 1
+[  325.825996] fedora ostree[2194]: Finished writing deployment
+[  325.827089] fedora ostree[2194]: Starting syncfs for system repo
+[  325.828117] fedora ostree[2194]: Completed syncfs() for system repo in 1 ms
+[  325.830339] fedora ostree[2194]: Cleanup complete
+[  325.832647] fedora systemd[1]: ostree-finalize-staged.service: Deactivated successfully.
+[  325.832962] fedora systemd[1]: Stopped ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+[  325.835156] fedora systemd[1]: ostree-finalize-staged.service: Consumed 1.680s CPU time over 2min 38.688s wall clock time, 142.5M memory peak.
+[  325.837757] fedora systemd[1]: Unmounting boot.mount - /boot...
+[  325.860596] fedora systemd[1]: boot.mount: Deactivated successfully.
+[  325.860877] fedora systemd[1]: Unmounted boot.mount - /boot.

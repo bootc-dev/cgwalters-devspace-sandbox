@@ -1,0 +1,395 @@
+From 161677b00d524c7c29b12d31bd269d9b11a71a0d Mon Sep 17 00:00:00 2001
+From: boot-2402 spike <noreply@example.invalid>
+Date: Sun, 8 Nov 2026 23:58:08 +0000
+Subject: [PATCH 5/6] sysroot: Use a detached mount for a separate /boot
+
+---
+ Makefile-libostree.am                  |   1 +
+ src/libostree/ostree-bootfs.c          | 255 +++++++++++++++++++++++++
+ src/libostree/ostree-sysroot-private.h |   7 +
+ src/libostree/ostree-sysroot.c         |  58 +++---
+ 4 files changed, 299 insertions(+), 22 deletions(-)
+ create mode 100644 src/libostree/ostree-bootfs.c
+
+diff --git a/Makefile-libostree.am b/Makefile-libostree.am
+index cffad416..508002a3 100644
+--- a/Makefile-libostree.am
++++ b/Makefile-libostree.am
+@@ -104,6 +104,7 @@ libostree_1_la_SOURCES = \
+ 	src/libostree/ostree-sepolicy-private.h \
+ 	src/libostree/ostree-sysroot-private.h \
+ 	src/libostree/ostree-sysroot.c \
++	src/libostree/ostree-bootfs.c \
+ 	src/libostree/ostree-sysroot-cleanup.c \
+ 	src/libostree/ostree-sysroot-deploy.c \
+ 	src/libostree/ostree-sysroot-upgrader.c \
+diff --git a/src/libostree/ostree-bootfs.c b/src/libostree/ostree-bootfs.c
+new file mode 100644
+index 00000000..4ade0320
+--- /dev/null
++++ b/src/libostree/ostree-bootfs.c
+@@ -0,0 +1,255 @@
++/*
++ * Copyright (C) 2026 Red Hat, Inc.
++ *
++ * SPDX-License-Identifier: LGPL-2.0+
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library. If not, see <https://www.gnu.org/licenses/>.
++ */
++
++/* Access to a separate /boot filesystem through a detached mount, so that
++ * nothing depends on what (if anything) is mounted at the /boot path. That
++ * path can be an automount that has expired, or one that can't be triggered
++ * from our mount namespace.
++ */
++
++#include "config.h"
++
++#include <linux/magic.h>
++#include <mntent.h>
++#include <sys/mount.h>
++#include <sys/stat.h>
++#include <sys/statfs.h>
++#include <sys/statvfs.h>
++#include <sys/sysmacros.h>
++
++#include "ostree-sysroot-private.h"
++#include "otutil.h"
++
++#define BOOT_MOUNTPOINT "/boot"
++#define FSTAB_PATH "/etc/fstab"
++/* Created by udev for a discoverable XBOOTLDR partition on the root disk; this
++ * is what systemd-gpt-auto-generator mounts when there's no fstab entry. */
++#define XBOOTLDR_DESIGNATOR "/dev/disk/by-designator/xbootldr"
++#define UDEV_FSTYPE_KEY "E:ID_FS_TYPE="
++
++#ifdef HAVE_OPEN_TREE
++
++/* Clone the mount at /boot if this mount namespace has one, without triggering
++ * an automount there. Returns -1 with errno ENOENT if there is none.
++ */
++static int
++clone_boot_mount (void)
++{
++  /* Without O_DIRECTORY, an O_PATH open doesn't trigger an automount on the
++   * last component; we get the autofs directory if it has expired. */
++  glnx_autofd int path_fd = open (BOOT_MOUNTPOINT, O_PATH | O_NOFOLLOW | O_CLOEXEC);
++  if (path_fd < 0)
++    return -1;
++  struct statfs stfs;
++  if (fstatfs (path_fd, &stfs) < 0)
++    return -1;
++  struct statx stx;
++  if (statx (path_fd, "", AT_EMPTY_PATH, STATX_BASIC_STATS, &stx) < 0)
++    return -1;
++  if (stfs.f_type == AUTOFS_SUPER_MAGIC || !(stx.stx_attributes & STATX_ATTR_MOUNT_ROOT))
++    {
++      errno = ENOENT;
++      return -1;
++    }
++  return open_tree (path_fd, "", OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH);
++}
++
++/* Map an fstab source such as UUID=... to a device path, or NULL */
++static char *
++resolve_source_spec (const char *spec)
++{
++  static const struct
++  {
++    const char *tag;
++    const char *dir;
++  } tags[] = {
++    { "UUID=", "/dev/disk/by-uuid/" },
++    { "PARTUUID=", "/dev/disk/by-partuuid/" },
++    { "LABEL=", "/dev/disk/by-label/" },
++    { "PARTLABEL=", "/dev/disk/by-partlabel/" },
++  };
++  for (guint i = 0; i < G_N_ELEMENTS (tags); i++)
++    {
++      if (g_str_has_prefix (spec, tags[i].tag))
++        return g_strconcat (tags[i].dir, spec + strlen (tags[i].tag), NULL);
++    }
++  if (spec[0] == '/')
++    return g_strdup (spec);
++  return NULL;
++}
++
++/* Find the device and filesystem type of the /boot entry in fstab */
++static void
++lookup_fstab_boot (char **out_source, char **out_fstype)
++{
++  FILE *f = setmntent (FSTAB_PATH, "re");
++  if (!f)
++    return;
++  struct mntent *me;
++  while ((me = getmntent (f)))
++    {
++      if (strcmp (me->mnt_dir, BOOT_MOUNTPOINT) != 0)
++        continue;
++      g_autofree char *source = resolve_source_spec (me->mnt_fsname);
++      if (!source)
++        continue;
++      g_free (*out_source);
++      *out_source = g_steal_pointer (&source);
++      g_free (*out_fstype);
++      *out_fstype = g_strdup (me->mnt_type);
++    }
++  endmntent (f);
++}
++
++/* Look up the filesystem type of a block device in the udev database */
++static char *
++probe_fstype (const char *device)
++{
++  struct stat stbuf;
++  if (stat (device, &stbuf) < 0 || !S_ISBLK (stbuf.st_mode))
++    return NULL;
++  g_autofree char *dbpath
++      = g_strdup_printf ("/run/udev/data/b%u:%u", major (stbuf.st_rdev), minor (stbuf.st_rdev));
++  g_autofree char *contents = NULL;
++  if (!g_file_get_contents (dbpath, &contents, NULL, NULL))
++    return NULL;
++  g_auto (GStrv) lines = g_strsplit (contents, "\n", -1);
++  for (char **it = lines; *it; it++)
++    {
++      if (g_str_has_prefix (*it, UDEV_FSTYPE_KEY))
++        return g_strdup (*it + strlen (UDEV_FSTYPE_KEY));
++    }
++  return NULL;
++}
++
++/* Returns a filesystem context fd, or -1 with errno set */
++static int
++create_fs_context (const char *source, const char *fstype, gboolean readonly)
++{
++  glnx_autofd int fsfd = fsopen (fstype, FSOPEN_CLOEXEC);
++  if (fsfd < 0)
++    return -1;
++  if (fsconfig (fsfd, FSCONFIG_SET_STRING, "source", source, 0) < 0)
++    return -1;
++  if (readonly && fsconfig (fsfd, FSCONFIG_SET_FLAG, "ro", NULL, 0) < 0)
++    return -1;
++  if (fsconfig (fsfd, FSCONFIG_CMD_CREATE, NULL, NULL, 0) < 0)
++    return -1;
++  return glnx_steal_fd (&fsfd);
++}
++
++/* Returns a detached mount of @source, or -1 with errno set */
++static int
++mount_boot_device (const char *source, const char *fstype)
++{
++  glnx_autofd int fsfd = create_fs_context (source, fstype, FALSE);
++  /* If the filesystem is mounted somewhere else, the kernel gives us that
++   * same superblock, but refuses (EBUSY) if it is read-only and we asked for
++   * read-write. Join it read-only then; _ostree_bootfs_ensure_writable() can
++   * reconfigure it, just as remounting /boot would. */
++  if (fsfd < 0 && errno == EBUSY)
++    fsfd = create_fs_context (source, fstype, TRUE);
++  if (fsfd < 0)
++    return -1;
++  return fsmount (fsfd, FSMOUNT_CLOEXEC, MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC);
++}
++
++#endif
++
++/* Open the root directory of a detached mount of the separate /boot filesystem of the
++ * booted system: a clone of the /boot mount in this mount namespace if there
++ * is one, otherwise a new mount of the device from fstab or the discoverable
++ * XBOOTLDR partition. Nothing is attached to the mount tree, so neither
++ * systemd nor any other process sees it, and it goes away with the last fd.
++ *
++ * Returns -1 with errno set on failure, ENOSYS if built without the new mount
++ * API, and ENOENT if there is no source for /boot.
++ */
++int
++_ostree_bootfs_open_detached (void)
++{
++#ifdef HAVE_OPEN_TREE
++  glnx_autofd int mnt_fd = clone_boot_mount ();
++  if (mnt_fd < 0 && errno == ENOENT)
++    {
++      g_autofree char *source = NULL;
++      g_autofree char *fstype = NULL;
++      lookup_fstab_boot (&source, &fstype);
++      if (!source && access (XBOOTLDR_DESIGNATOR, F_OK) == 0)
++        source = g_strdup (XBOOTLDR_DESIGNATOR);
++      if (!source)
++        {
++          errno = ENOENT;
++          return -1;
++        }
++      if (!fstype || strcmp (fstype, "auto") == 0)
++        {
++          g_free (fstype);
++          fstype = probe_fstype (source);
++          if (!fstype)
++            {
++              errno = ENOENT;
++              return -1;
++            }
++        }
++      g_debug ("Mounting %s (%s) for /boot", source, fstype);
++      mnt_fd = mount_boot_device (source, fstype);
++    }
++  if (mnt_fd < 0)
++    return -1;
++
++  /* Only we can see this mount, so make it writable at the mount level; then
++   * just the superblock decides. */
++  struct mount_attr attr = { .attr_clr = MOUNT_ATTR_RDONLY };
++  if (mount_setattr (mnt_fd, "", AT_EMPTY_PATH, &attr, sizeof (attr)) < 0)
++    return -1;
++  /* Mount fds are O_PATH, which openat() takes but ioctl(FIFREEZE), syncfs()
++   * and fstatvfs() don't. An open directory keeps the detached mount alive
++   * by itself. */
++  return openat (mnt_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++#else
++  errno = ENOSYS;
++  return -1;
++#endif
++}
++
++/* Make the superblock behind a detached boot mount writable if it isn't. Like
++ * remounting /boot, this affects every mount of that filesystem. */
++gboolean
++_ostree_bootfs_ensure_writable (int boot_fd, GError **error)
++{
++#ifdef HAVE_OPEN_TREE
++  struct statvfs stvfsbuf;
++  if (fstatvfs (boot_fd, &stvfsbuf) < 0)
++    return glnx_throw_errno_prefix (error, "fstatvfs(boot)");
++  if ((stvfsbuf.f_flag & ST_RDONLY) == 0)
++    return TRUE;
++
++  glnx_autofd int fsfd = fspick (boot_fd, "", FSPICK_EMPTY_PATH | FSPICK_CLOEXEC);
++  if (fsfd < 0)
++    return glnx_throw_errno_prefix (error, "fspick(boot)");
++  if (fsconfig (fsfd, FSCONFIG_SET_FLAG, "rw", NULL, 0) < 0
++      || fsconfig (fsfd, FSCONFIG_CMD_RECONFIGURE, NULL, NULL, 0) < 0)
++    return glnx_throw_errno_prefix (error, "Reconfiguring boot filesystem read-write");
++  g_debug ("reconfigured boot filesystem writable");
++  return TRUE;
++#else
++  return glnx_throw (error, "Detached boot mounts are not supported");
++#endif
++}
+diff --git a/src/libostree/ostree-sysroot-private.h b/src/libostree/ostree-sysroot-private.h
+index c8640de0..dc992b1f 100644
+--- a/src/libostree/ostree-sysroot-private.h
++++ b/src/libostree/ostree-sysroot-private.h
+@@ -73,6 +73,9 @@ struct OstreeSysroot
+   // Set if the /boot filesystem is VFAT.
+   // Only initialized if boot_fd is set.
+   gboolean boot_is_vfat;
++  // Set if boot_fd is the root of a detached mount of a separate /boot (see ostree-bootfs.c).
++  // Only initialized if boot_fd is set.
++  gboolean boot_is_detached;
+   // Lock for this sysroot.
+   GLnxLockFile lock;
+ 
+@@ -186,6 +189,10 @@ char *_ostree_sysroot_join_lines (GPtrArray *lines);
+ 
+ gboolean _ostree_sysroot_ensure_boot_fd (OstreeSysroot *self, GError **error);
+ 
++int _ostree_bootfs_open_detached (void);
++
++gboolean _ostree_bootfs_ensure_writable (int boot_fd, GError **error);
++
+ gboolean _ostree_sysroot_query_bootloader (OstreeSysroot *sysroot,
+                                            OstreeBootloader **out_bootloader,
+                                            GCancellable *cancellable, GError **error);
+diff --git a/src/libostree/ostree-sysroot.c b/src/libostree/ostree-sysroot.c
+index daa582cb..77002822 100644
+--- a/src/libostree/ostree-sysroot.c
++++ b/src/libostree/ostree-sysroot.c
+@@ -353,29 +353,37 @@ validate_boot_fd (OstreeSysroot *self, int fd, GError **error)
+   return TRUE;
+ }
+ 
+-/* Path to the boot filesystem of a booted system. When /boot is a directory of
+- * the physical root, the deployment's /boot is only a bind mount of it made by
+- * ostree-system-generator, and other units can stack an automount on that
+- * path; systemd-gpt-auto-generator does for an unused ESP, e.g. when booted
+- * via BIOS. Once that automount expires, /boot is no longer reachable from
+- * another mount namespace (EPERM), so use the source, which always is.
+- * Returns a string literal.
++/* Open the boot/ directory, or return -1 with errno set.
++ *
++ * On a booted system, never depend on the /boot path: other units can stack
++ * an automount there (systemd-gpt-auto-generator does for an unused ESP, e.g.
++ * when booted via BIOS), and once that expires, /boot is no longer reachable
++ * from another mount namespace (EPERM). When /boot is a directory of the
++ * physical root, the deployment's /boot is only a bind mount of it made by
++ * ostree-system-generator, so use the source, which always is reachable.
++ * Otherwise use a detached mount of the boot filesystem.
+  */
+-static const char *
+-booted_boot_path (void)
+-{
+-  if (otcore_boot_is_on_physical_root ("/sysroot"))
+-    return "/sysroot/boot";
+-  return "/boot";
+-}
+-
+-/* Open the boot/ directory, or return -1 with errno set */
+ static int
+ open_boot_dir (OstreeSysroot *self)
+ {
+-  if (self->root_is_ostree_booted)
+-    return glnx_opendirat_with_errno (AT_FDCWD, booted_boot_path (), TRUE);
+-  return glnx_opendirat_with_errno (self->sysroot_fd, "boot", TRUE);
++  self->boot_is_detached = FALSE;
++  if (!self->root_is_ostree_booted)
++    return glnx_opendirat_with_errno (self->sysroot_fd, "boot", TRUE);
++  if (otcore_boot_is_on_physical_root ("/sysroot"))
++    return glnx_opendirat_with_errno (AT_FDCWD, "/sysroot/boot", TRUE);
++  /* Unprivileged callers can only read, from their own mount namespace, in
++   * which accessing /boot triggers the automount if there is one. */
++  if (ot_util_process_privileged ())
++    {
++      int fd = _ostree_bootfs_open_detached ();
++      if (fd >= 0)
++        {
++          self->boot_is_detached = TRUE;
++          return fd;
++        }
++      g_debug ("Opening a detached mount of /boot: %s; using the path", g_strerror (errno));
++    }
++  return glnx_opendirat_with_errno (AT_FDCWD, "/boot", TRUE);
+ }
+ 
+ /* Require that both self->sysroot_fd is set.
+@@ -478,10 +486,16 @@ _ostree_sysroot_ensure_writable (OstreeSysroot *self, GError **error)
+ 
+   /* When /boot is a directory of the physical root, boot_fd is opened from
+    * /sysroot/boot, which is now writable. /boot is then only a bind mount of it
+-   * that may have an automount stacked on top (see booted_boot_path()), so
+-   * leave it alone. Otherwise /boot is its own filesystem; remount it.
++   * that may have an automount stacked on top (see open_boot_dir()), so
++   * leave it alone. Otherwise /boot is its own filesystem; make it writable
++   * through our detached mount of it if we have one, else remount /boot.
+    */
+-  if (!otcore_boot_is_on_physical_root ("/sysroot"))
++  if (self->boot_is_detached)
++    {
++      if (!_ostree_bootfs_ensure_writable (self->boot_fd, error))
++        return FALSE;
++    }
++  else if (!otcore_boot_is_on_physical_root ("/sysroot"))
+     {
+       gboolean did_remount_boot = FALSE;
+       if (!remount_writable ("/boot", &did_remount_boot, error))
+-- 
+2.52.0
+

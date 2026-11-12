@@ -1,0 +1,82 @@
+### 0-info
+libostree:
+ Version: '2026.7'
+ DevelBuild: yes
+bootc 1.17.1
+NAME    SIZE FSTYPE PARTTYPENAME        MOUNTPOINTS
+sr0    1024M                            
+vda      30G                            
+|-vda1    1M        BIOS boot           
+|-vda2  512M vfat   EFI System          
+|-vda3    1G ext4   Linux filesystem    /boot
+`-vda4 28.5G xfs    Linux root (x86-64) /var
+                                        /sysroot/ostree/deploy/default/var
+                                        /sysroot
+                                        /etc
+UUID=74148a6b-03c2-4c1d-a531-2d1b7eef3aa1 /boot auto ro 0 0
+none
+Enforcing
+### 1-before-stage
+Mon Nov  9 01:28:28 UTC 2026
+TARGET SOURCE    FSTYPE OPTIONS
+/boot  systemd-1 autofs rw,relatime,fd=86,pgrp=1,timeout=60,minproto=5,maxproto=5,direct,pipe_ino=1918
+failed
+active
+active
+### 2-stage
+bootc status: rc=0
+  default 0bbd8486e3a9b310324d1de5727334d020eeb6b1d4010ddac12145102abacb2b.1 (staged)
+    origin refspec: 0bbd8486e3a9b310324d1de5727334d020eeb6b1d4010ddac12145102abacb2b
+* default 0bbd8486e3a9b310324d1de5727334d020eeb6b1d4010ddac12145102abacb2b.0
+    origin: <unknown origin type>
+ostree admin status: rc=0
+kargs edit-in-place: rc=0
+deploy --stage: rc=0
+### 3-before-reboot
+### 4-check
+BOOT_IMAGE=(hd0,gpt3)/boot/ostree/default-370160b2730013d8955182ae19354e1bce68a4fff17dfe8ad221793a5743eb3a/vmlinuz-7.2.15-200.fc44.x86_64 root=UUID=233e061d-820d-4c55-bd83-6e47e7bf25d7 rw boot=UUID=74148a6b-03c2-4c1d-a531-2d1b7eef3aa1 console=ttyS0 ostree=/ostree/boot.0/default/370160b2730013d8955182ae19354e1bce68a4fff17dfe8ad221793a5743eb3a/0 spike.marker=1
+RESULT: staged deployment booted
+system_u:object_r:boot_t:s0 ostree-1.conf
+system_u:object_r:boot_t:s0 ostree-2.conf
+/boot/loader/entries/ostree-1.conf:options root=UUID=233e061d-820d-4c55-bd83-6e47e7bf25d7 rw boot=UUID=74148a6b-03c2-4c1d-a531-2d1b7eef3aa1 console=ttyS0 ostree=/ostree/boot.0/default/370160b2730013d8955182ae19354e1bce68a4fff17dfe8ad221793a5743eb3a/1 spike.interactive=1
+AVC denials in previous boot: 0
+[  122.312284] fedora mount[1095]:       * vda3: Can't mount, would change RO state
+[  122.313355] fedora systemd[1]: boot.mount: Mount process exited, code=exited, status=32/n/a
+[  122.313373] fedora systemd[1]: boot.mount: Failed with result 'exit-code'.
+[  122.313707] fedora systemd[1]: Failed to mount boot.mount - /boot.
+[  122.316507] fedora systemd[1]: Starting ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment...
+[  122.327412] fedora systemd[1]: Started ostree-finalize-staged-hold.service - Hold /boot Open for OSTree Finalize Staged Deployment.
+[  122.328213] fedora systemd[1]: Finished ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+[  161.506672] fedora systemd[1]: Mounting boot.mount - /boot...
+[  161.520026] fedora mount[1154]: mount: /boot: /dev/vda3 already mounted or mount point busy.
+[  161.520026] fedora mount[1154]:        dmesg(1) may have more information after failed mount system call.
+[  161.520480] fedora mount[1154]: mount warning:
+[  161.520480] fedora mount[1154]:       * vda3: Can't mount, would change RO state
+[  161.520569] fedora systemd[1]: boot.mount: Mount process exited, code=exited, status=32/n/a
+[  161.520596] fedora systemd[1]: boot.mount: Failed with result 'exit-code'.
+[  161.520954] fedora systemd[1]: Failed to mount boot.mount - /boot.
+[  278.523311] fedora systemd[1]: Stopping ostree-finalize-staged.service - OSTree Finalize Staged Deployment...
+[  278.607898] fedora ostree[1248]: Finalizing staged deployment
+[  279.218843] fedora ostree[1248]: Copying /etc changes: 3 modified, 0 removed, 14 added
+[  279.219132] fedora ostree[1248]: Copying /etc changes: 3 modified, 0 removed, 14 added
+[  279.232973] fedora ostree[1248]: Refreshing SELinux policy
+[  280.363208] fedora ostree[1248]: Refreshed SELinux policy in 1131 ms
+[  280.369765] fedora ostree[1248]: Finalized deployment
+[  280.370214] fedora ostree[1248]: bootfs is sufficient for calculated new size: 0 bytes
+[  280.613515] fedora ostree[1248]: Starting syncfs for system repo
+[  280.620410] fedora ostree[1248]: Completed syncfs() for system repo in 7 ms
+[  280.620427] fedora ostree[1248]: Starting freeze/thaw cycle for boot
+[  280.638119] fedora ostree[1248]: Completed freeze/thaw cycle for boot in 18 ms
+[  280.638162] fedora ostree[1248]: Starting freeze/thaw cycle for boot
+[  280.640937] fedora ostree[1248]: Completed freeze/thaw cycle for boot in 2 ms
+[  280.641057] fedora ostree[1248]: Bootloader updated; bootconfig swap: yes; bootversion: boot.0.1, deployment count change: 1
+[  280.641201] fedora ostree[1248]: Bootloader updated; bootconfig swap: yes; bootversion: boot.0.1, deployment count change: 1
+[  280.641509] fedora ostree[1248]: Finished writing deployment
+[  280.642468] fedora ostree[1248]: Starting syncfs for system repo
+[  280.643561] fedora ostree[1248]: Completed syncfs() for system repo in 1 ms
+[  280.645759] fedora ostree[1248]: Cleanup complete
+[  280.648274] fedora systemd[1]: ostree-finalize-staged.service: Deactivated successfully.
+[  280.648651] fedora systemd[1]: Stopped ostree-finalize-staged.service - OSTree Finalize Staged Deployment.
+[  280.650935] fedora systemd[1]: ostree-finalize-staged.service: Consumed 1.687s CPU time over 2min 38.320s wall clock time, 145.8M memory peak.
+[  280.653095] fedora systemd[1]: boot.automount: Deactivated successfully.
+[  280.653262] fedora systemd[1]: Unset automount boot.automount.
