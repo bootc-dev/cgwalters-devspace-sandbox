@@ -44,6 +44,15 @@ to run a subset. To run a single disk, use
 `--no-idle` for a control run that touches `/boot` and updates straight away.
 `node harness.mjs --help` lists the image and layout names.
 
+Continuation probes: `run DISK --firmware bios --lifecycle` adds separate
+mount-namespace status checks, rollback verified by commit checksum, a distinct
+second update, and cleanup inventories. Inspect those inventories: command
+success alone does not prove orphan removal. `build-integration` builds the
+pinned upstream test binary under `$B2402_STATE/integration`; pass its path to
+`run DISK --integration PATH` to run it in a fresh VM without staging updates.
+That mode also records a soft-reboot request probe, not a soft-reboot update
+test. See RESULTS.md for measured coverage and outstanding verification.
+
 `matrix --filter` matches the full run ID, including its firmware suffix.
 For example, the remaining PR 55 BIOS rows were selected with
 `--filter 'centos-bootc-9--pr3690--(default-bios|root|root-fstab-esp)--bios$'

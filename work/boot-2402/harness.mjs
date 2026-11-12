@@ -30,6 +30,8 @@ const SILVERBLUE_PAYLOAD =
 
 const OSTREE_REPO = 'https://github.com/ostreedev/ostree';
 const OSTREE_PR = '3690';
+const PINNED_VARIANT = 'pr3690-28854659';
+const PINNED_COMMIT = '288546598d115aadb49d134a1b8a6c2a04d6fe88';
 
 const BOOTC_IMAGES = {
   'fedora-bootc-45': 'quay.io/fedora/fedora-bootc:45',
@@ -38,7 +40,7 @@ const BOOTC_IMAGES = {
   'centos-bootc-10': 'quay.io/centos-bootc/centos-bootc:stream10',
 };
 const DEFAULT_BOOTC_IMAGES = ['fedora-bootc-45', 'centos-bootc-10'];
-const VARIANTS = ['stock', `pr${OSTREE_PR}`];
+const VARIANTS = ['stock', `pr${OSTREE_PR}`, PINNED_VARIANT];
 
 // GPT partition type GUIDs (Discoverable Partitions Specification).
 const GPT = {
@@ -366,16 +368,17 @@ const nextArchive = (image, variant, efiDir) => path.join(STATE, 'next', `${imag
 // the build matches the shipped version and its dependencies.
 async function buildPatchedOstree(vm, image) {
   const out = `/var/b2402/rpms/${image}`;
+  const patchDir = `/var/b2402/patches-pr${OSTREE_PR}`;
   const r = await vm.ssh(`ls ${out}/ostree-libs-*.rpm 2>/dev/null | head -1`, { check: false });
-  if (r.out.trim()) return;
+  if (r.code === 0 && r.out.trim()) return;
   await vm.ssh(`set -euo pipefail
 cd /var/b2402
 if ! test -d ostree.git; then git clone -q --bare --filter=blob:none ${OSTREE_REPO} ostree.git; fi
 git -C ostree.git fetch -q origin main pull/${OSTREE_PR}/head:pr${OSTREE_PR}
-rm -rf patches-pr${OSTREE_PR} && mkdir patches-pr${OSTREE_PR}
+rm -rf ${patchDir} && mkdir ${patchDir}
 base=$(git -C ostree.git merge-base main pr${OSTREE_PR})
-git -C ostree.git format-patch -q -o /var/b2402/patches-pr${OSTREE_PR} $base..pr${OSTREE_PR}
-git -C ostree.git rev-parse pr${OSTREE_PR} > patches-pr${OSTREE_PR}/HEAD`, { timeoutS: 1800 });
+git -C ostree.git format-patch -q -o ${patchDir} $base..pr${OSTREE_PR}
+git -C ostree.git rev-parse pr${OSTREE_PR} > ${patchDir}/HEAD`, { timeoutS: 1800 });
   const script = `set -euxo pipefail
 if command -v dnf5; then dnf -y -q install rpm-build dnf5-plugins; else dnf -y -q install rpm-build 'dnf-command(builddep)' 'dnf-command(download)'; fi
 cd /tmp
@@ -387,7 +390,10 @@ cd $top/SPECS
 grep -q '^%autosetup' ostree.spec
 n=9000
 # Commits that only add tests touch files the release tarball doesn't ship.
-for p in /patches/0*.patch; do case $p in *-tests-*) continue;; esac; n=$((n+1)); cp $p ../SOURCES/; sed -i "/^Source0:/a Patch$n: $(basename $p)" ostree.spec; done
+# Insert the series once: repeated Source0 appends reverse dependency order.
+: > /tmp/b2402-patches
+for p in /patches/0*.patch; do case $p in *-tests-*) continue;; esac; n=$((n+1)); cp $p ../SOURCES/; printf 'Patch%s: %s\\n' "$n" "$(basename $p)" >> /tmp/b2402-patches; done
+sed -i '/^Source0:/r /tmp/b2402-patches' ostree.spec
 # Some of ostree's build dependencies are in CRB on CentOS Stream.
 dnf -y -q builddep $(command -v dnf5 >/dev/null || echo --enablerepo=crb) ostree.spec
 rpmbuild -bb --nocheck --define "_topdir $top" --define "dist $(rpm --eval %dist).b2402" ostree.spec
@@ -396,22 +402,54 @@ ls /out/ostree-libs-*.rpm`;
   log('builder', `building ostree with PR ${OSTREE_PR} for ${image}`);
   await vm.ssh(`set -euo pipefail
 mkdir -p ${out}
-podman run --rm --network=host ${CA_MOUNT} -v /var/b2402/patches-pr${OSTREE_PR}:/patches:ro,Z -v ${out}:/out:Z ${BOOTC_IMAGES[image]} bash -c ${q(script)} > ${out}.log 2>&1 || { tail -50 ${out}.log; exit 1; }`, { timeoutS: 3600 });
+podman run --rm --network=host ${CA_MOUNT} -v ${patchDir}:/patches:ro,Z -v ${out}:/out:Z ${BOOTC_IMAGES[image]} bash -c ${q(script)} > ${out}.log 2>&1 || { tail -50 ${out}.log; exit 1; }
+cp ${patchDir}/HEAD ${out}/HEAD
+sha256sum ${out}/*.rpm > ${out}/SHA256SUMS`, { timeoutS: 3600 });
 }
 
 // Pull the base image and build the derived image a disk is installed from,
 // plus the "next" image the update switches to (saved as an OCI archive).
+async function buildPinnedSource(vm, image) {
+  const dir = `/var/b2402/source-${image}-${PINNED_VARIANT}`;
+  const script = `set -euxo pipefail
+if command -v dnf5; then dnf -y -q install dnf5-plugins; else dnf -y -q install 'dnf-command(builddep)'; fi
+dnf -y -q builddep $(command -v dnf5 >/dev/null || echo --enablerepo=crb) ostree
+dnf -y -q install git-core autoconf automake libtool make gcc gtk-doc
+git clone https://github.com/cgwalters-forge/ostree /tmp/ostree
+cd /tmp/ostree
+git checkout --detach ${PINNED_COMMIT}
+test "$(git rev-parse HEAD)" = ${PINNED_COMMIT}
+git submodule update --init --recursive
+./autogen.sh --prefix=/usr --libdir=/usr/lib64 --sysconfdir=/etc --localstatedir=/var --with-curl --with-composefs --with-openssl --with-selinux --with-dracut --disable-gtk-doc --disable-man${image === 'centos-bootc-10' ? ' --without-soup' : ''}
+make -j16
+make install DESTDIR=/out/rootfs
+git rev-parse HEAD > /out/HEAD
+git submodule status --recursive > /out/submodules
+sha256sum /out/rootfs/usr/bin/ostree /out/rootfs/usr/lib64/libostree-1.so.* > /out/SHA256SUMS`;
+  const result = await vm.ssh(`set -euo pipefail
+rm -rf ${dir} && mkdir -p ${dir}
+podman run --rm --network=host ${CA_MOUNT} -v ${dir}:/out:Z ${BOOTC_IMAGES[image]} bash -c ${q(script)} > ${dir}.log 2>&1 || { tail -60 ${dir}.log; exit 1; }`, { check: false, timeoutS: 3600 });
+  const local = path.join(STATE, 'builds');
+  fs.mkdirSync(local, { recursive: true });
+  await vm.scpFrom(`${dir}.log`, path.join(local, `${image}-${PINNED_VARIANT}.log`));
+  if (result.code !== 0) throw new Error(`pinned source build failed: ${result.out}${result.err}`);
+  return dir;
+}
+
 async function ensureImages(vm, image, variant, efiDir) {
   const tag = imageTag(image, variant, efiDir);
   const archive = nextArchive(image, variant, efiDir);
   const have = await vm.ssh(`podman image exists ${q(tag)}`, { check: false });
   if (have.code === 0 && fs.existsSync(archive)) return tag;
   const patched = variant !== 'stock';
-  if (patched) await buildPatchedOstree(vm, image);
+  const sourceDir = variant === PINNED_VARIANT ? await buildPinnedSource(vm, image) : null;
+  if (patched && !sourceDir) await buildPatchedOstree(vm, image);
+  const rpmDir = image;
   const containerfile = [
     `FROM ${BOOTC_IMAGES[image]}`,
     ...(efiDir ? ['RUN mkdir /efi'] : []),
-    ...(patched ? [`RUN --mount=type=bind,source=rpms/${image},target=/rpms rpm -Fvh --nosignature /rpms/*.rpm && rpm -q ostree | grep b2402`] : []),
+    ...(sourceDir ? [`COPY ${path.basename(sourceDir)}/rootfs/ /`, 'RUN ldconfig && ostree --version']
+      : patched ? [`RUN --mount=type=bind,source=rpms/${rpmDir},target=/rpms rpm -Fvh --nosignature /rpms/*.rpm && rpm -q ostree | grep b2402`] : []),
   ].join('\n');
   const next = `FROM ${tag}\nRUN mkdir -p ${path.dirname(NEXT_MARKER)} && echo ${q(tag)} > ${NEXT_MARKER}`;
   const remoteArchive = `/var/b2402/next-${path.basename(archive)}`;
@@ -428,6 +466,11 @@ podman save -q --format oci-archive -o ${remoteArchive} ${q(nextTag(tag))}`, { t
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   await vm.scpFrom(remoteArchive, `${archive}.tmp`);
   fs.renameSync(`${archive}.tmp`, archive);
+  const provenance = await vm.ssh(`set -euo pipefail
+podman image inspect ${q(BOOTC_IMAGES[image])} ${q(tag)} ${q(nextTag(tag))}
+${sourceDir ? `cat ${sourceDir}/HEAD ${sourceDir}/submodules ${sourceDir}/SHA256SUMS` : ''}`);
+  fs.writeFileSync(`${archive}.provenance.txt`, provenance.out);
+  if (patched) await vm.scpFrom(sourceDir ? `${sourceDir}.log` : `/var/b2402/rpms/${rpmDir}.log`, `${archive}.build.log`);
   await vm.ssh(`rm -f ${remoteArchive}`);
   return tag;
 }
@@ -520,7 +563,7 @@ umount -R ${mnt}`;
 
 async function cmdBuildBootc(opts) {
   const images = opts.image?.length ? opts.image : DEFAULT_BOOTC_IMAGES;
-  const variants = opts.variant?.length ? opts.variant : VARIANTS;
+  const variants = opts.variant?.length ? opts.variant : ['stock', `pr${OSTREE_PR}`];
   const layouts = opts.layout?.length ? opts.layout : Object.keys(BOOTC_LAYOUTS);
   fs.mkdirSync(DISKS_DIR, { recursive: true });
   const todo = [];
@@ -781,7 +824,7 @@ function serialFailures(serial, max = 12) {
   return [...new Set(lines)].slice(0, max);
 }
 
-async function runOne(diskName, { firmware, idle = true, tag, variant }) {
+async function runOne(diskName, { firmware, idle = true, tag, variant, lifecycle = false, integration }) {
   const disk = JSON.parse(fs.readFileSync(path.join(DISKS_DIR, `${diskName}.json`), 'utf8'));
   if (variant && variant !== disk.variant) {
     if (disk.kind !== 'silverblue') throw new Error('only Silverblue disks take a run-time variant');
@@ -789,7 +832,8 @@ async function runOne(diskName, { firmware, idle = true, tag, variant }) {
     disk.rpms = path.join(STATE, 'rpms', 'fedora-bootc-45');
   }
   const variantTag = variant && variant !== 'stock' ? `--${variant}` : '';
-  const id = `${diskName}${variantTag}--${firmware}${idle ? '' : '--noidle'}${tag ? `--${tag}` : ''}`;
+  if (lifecycle && disk.kind !== 'bootc') throw new Error('lifecycle requires a bootc disk');
+  const id = `${diskName}${variantTag}--${firmware}${idle ? '' : '--noidle'}${lifecycle ? '--lifecycle' : ''}${integration ? '--integration' : ''}${tag ? `--${tag}` : ''}`;
   const dir = path.join(RUNS_DIR, id);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
@@ -813,7 +857,40 @@ async function runOne(diskName, { firmware, idle = true, tag, variant }) {
     result.idleTimeout = u['boot.automount']?.TimeoutIdleUSec ?? null;
     result.bootMountUnit = u['boot.mount']?.FragmentPath || null;
     result.bootMountWhat = u['boot.mount']?.What || null;
-    for (const step of stepsFor(disk)) {
+    // admin status appends the deployment serial (.0, .1); re-deploying the
+    // same commit can change that serial without changing the image.
+    const checksum = async () => {
+      const r = await ev.cmd(vm, 'booted checksum', BOOTED_CHECKSUM);
+      const value = r.out.trim().replace(/\.\d+$/, '');
+      if (r.code !== 0 || !/^[a-f0-9]{64}$/.test(value)) throw new Error('invalid booted checksum');
+      return value;
+    };
+    const originalChecksum = lifecycle ? await checksum() : null;
+    if (lifecycle) {
+      result.namespaceIdleOut = await waitIdleOut(vm, IDLE_WAIT_S);
+      result.namespaceStatus = {};
+      for (const command of ['ostree admin status', 'bootc status']) {
+        // Wait separately: the first status call may trigger the automount.
+        const idleOut = await waitIdleOut(vm, IDLE_WAIT_S);
+        const status = await ev.cmd(vm, `namespace ${command}`, `unshare -m -- ${command}`);
+        result.namespaceStatus[command] = { idleOut, exit: status.code };
+      }
+    }
+    if (integration) {
+      await vm.scpTo(integration, '/var/tmp/ostree-bootc-integration-tests');
+      await vm.ssh('chmod +x /var/tmp/ostree-bootc-integration-tests');
+      result.integrationIdleOut = await waitIdleOut(vm, IDLE_WAIT_S);
+      result.integrationExit = (await ev.cmd(vm, 'upstream bootc-integration', '/var/tmp/ostree-bootc-integration-tests --test-threads=1')).code;
+      await ev.cmd(vm, 'bootc available maintenance commands', 'bootc --help; bootc internals --help');
+      // Probe soft reboot support without mistaking a normal reboot for one.
+      const bootId = (await vm.ssh('cat /proc/sys/kernel/random/boot_id')).out.trim();
+      result.softRebootExit = (await ev.cmd(vm, 'soft reboot request', 'systemctl soft-reboot', { timeoutS: 30 })).code;
+      await sleep(20);
+      await vm.waitSsh(120);
+      result.softRebootSameKernel = (await vm.ssh('cat /proc/sys/kernel/random/boot_id')).out.trim() === bootId;
+      await ev.cmd(vm, 'soft reboot evidence', 'journalctl -b --no-pager -u systemd-soft-reboot.service; cat /run/systemd/soft-reboot-count');
+    }
+    for (const step of integration ? [] : stepsFor(disk)) {
       const sr = { name: step.name, setup: !!step.setup };
       result.steps.push(sr);
       if (step.prepare?.local) await vm.scpTo(step.prepare.local, step.prepare.remote);
@@ -858,7 +935,37 @@ async function runOne(diskName, { firmware, idle = true, tag, variant }) {
       if (!sr.bootedNew) break;
     }
     const measured = result.steps.filter((s) => !s.setup);
-    result.updateSurvived = measured.length > 0 && measured.every((s) => s.bootedNew);
+    result.updateSurvived = measured.length > 0 ? measured.every((s) => s.bootedNew) : null;
+    if (lifecycle && result.updateSurvived) {
+      const updatedChecksum = await checksum();
+      result.rollbackExit = (await ev.cmd(vm, 'rollback', 'bootc rollback')).code;
+      if (result.rollbackExit !== 0) throw new Error('bootc rollback failed');
+      await vm.reboot();
+      result.rollbackVerified = await checksum() === originalChecksum;
+      if (!result.rollbackVerified) throw new Error('rollback did not restore original checksum');
+      // Re-select the first update before creating a distinct second update.
+      await vm.ssh('ls /boot >/dev/null');
+      await ev.cmd(vm, 'restore first update', stepsFor(disk)[0].stage, { check: true });
+      await vm.reboot();
+      if (await checksum() !== updatedChecksum) throw new Error('first update not restored');
+      const source = nextTag(imageTag(disk.image, disk.variant, disk.layout.efiDir));
+      const second = `FROM ${source}\nRUN echo second > /usr/share/b2402/second\n`;
+      await ev.cmd(vm, 'build distinct second update', `set -euo pipefail
+podman load -i /var/tmp/b2402-next.ociarchive
+printf '%s' ${q(second)} | podman build --network=none -t localhost/b2402-second -f -
+podman save --format oci-archive -o /var/tmp/b2402-second.ociarchive localhost/b2402-second
+podman image inspect localhost/b2402-second`, { check: true });
+      await ev.cmd(vm, 'stage second update', 'bootc switch --transport oci-archive /var/tmp/b2402-second.ociarchive', { check: true });
+      await vm.reboot();
+      result.secondUpdateVerified = (await ev.cmd(vm, 'verify second update', 'test -e /usr/share/b2402/second')).code === 0;
+      if (!result.secondUpdateVerified) throw new Error('second update did not boot');
+      await ev.cmd(vm, 'before cleanup inventory', 'ostree admin status; find /boot -xdev -printf "%P %l\\n"');
+      result.cleanupExit = (await ev.cmd(vm, 'ostree cleanup', 'ostree admin cleanup')).code;
+      result.gcExit = (await ev.cmd(vm, 'bootc cleanup/GC', 'bootc internals cleanup')).code;
+      await ev.cmd(vm, 'after cleanup inventory', 'ostree admin status; bootc status; find /boot -xdev -printf "%P %l\\n"');
+      // Keep command success separate from inspection of retained loader entries.
+      result.cleanupInventoryNeedsReview = true;
+    }
   } catch (e) {
     result.error = e.message;
     ev.note(`### harness error\n${e.stack}`);
@@ -1019,13 +1126,14 @@ function bootMountedBy(u, fstabMounts) {
 const USAGE = `usage: node harness.mjs <command> [options]
 
   fetch                     download the Fedora Cloud image (builder) and the Silverblue ISO
-  build-bootc               install bootc disks: [--image NAME]... [--variant stock|pr${OSTREE_PR}]... [--layout NAME]... [--force] [--jobs N]
+  build-bootc               install bootc disks: [--image NAME]... [--variant ${VARIANTS.join('|')}]... [--layout NAME]... [--force] [--jobs N]
   fetch-rpms                build ostree with PR ${OSTREE_PR} for Fedora and copy the RPMs out (for Silverblue)
   install-silverblue        install Silverblue from the ISO: [--layout NAME]... [--force] [--jobs N]
   run DISK                  one test run: [--firmware uefi|bios] [--no-idle] [--tag T] [--variant pr${OSTREE_PR} (Silverblue)]
   matrix                    run every built disk: [--filter REGEX] [--firmware F]... [--no-idle] [--force] [--jobs N]
   silverblue-pr             run the Silverblue disks with ostree PR ${OSTREE_PR} applied via override replace
-  report                    print the results table (Markdown)
+  build-integration         build the pinned upstream integration runner in Stream 10
+  report                    print the update results table (Markdown)
   audit-boot-chain           inspect current Stream 10 image and download boot-chain source RPMs
 
 State lives in $B2402_STATE (default /var/tmp/b2402).
@@ -1046,6 +1154,8 @@ async function main() {
       jobs: { type: 'string' },
       force: { type: 'boolean' },
       'no-idle': { type: 'boolean' },
+      lifecycle: { type: 'boolean' },
+      integration: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -1059,13 +1169,35 @@ async function main() {
     case 'install-silverblue': return cmdInstallSilverblue(opts);
     case 'run': {
       if (!rest[0]) throw new Error('run needs a disk name');
-      const r = await runOne(rest[0], { firmware: opts.firmware?.[0] ?? 'uefi', idle: !opts['no-idle'], tag: opts.tag, variant: opts.variant?.[0] });
-      return console.log(JSON.stringify(r, null, 2));
+      const r = await runOne(rest[0], { firmware: opts.firmware?.[0] ?? 'uefi', idle: !opts['no-idle'], tag: opts.tag, variant: opts.variant?.[0], lifecycle: opts.lifecycle, integration: opts.integration });
+      console.log(JSON.stringify(r, null, 2));
+      if (r.error || (opts.integration && r.integrationExit !== 0) ||
+          (opts.lifecycle && (r.cleanupExit !== 0 || r.gcExit !== 0))) process.exitCode = 1;
+      return;
     }
     case 'matrix': return cmdMatrix(opts);
     case 'silverblue-pr': return cmdRunSilverbluePatched(opts);
     case 'report': return cmdReport();
     case 'audit-boot-chain': return cmdAuditBootChain();
+    case 'build-integration': {
+      const local = path.join(STATE, 'integration');
+      fs.mkdirSync(local, { recursive: true });
+      return withBuilder([], async (vm) => {
+        const script = `set -euxo pipefail
+dnf -y install cargo rust git-core gcc openssl-devel pkgconf-pkg-config
+git clone https://github.com/cgwalters-forge/ostree /tmp/ostree
+cd /tmp/ostree
+git checkout --detach ${PINNED_COMMIT}
+cargo build --release --jobs 4 --manifest-path tests/bootc-integration/Cargo.toml
+cp tests/bootc-integration/target/release/ostree-bootc-integration-tests /out/
+sha256sum /out/ostree-bootc-integration-tests`;
+        const r = await vm.ssh(`mkdir -p /var/b2402/integration
+podman run --rm --network=host ${CA_MOUNT} -v /var/b2402/integration:/out:Z ${BOOTC_IMAGES['centos-bootc-10']} bash -c ${q(script)} > /var/b2402/integration/build.log 2>&1`, { check: false, timeoutS: 1200 });
+        await vm.scpFrom('/var/b2402/integration/build.log', path.join(local, 'build.log'));
+        if (r.code !== 0) throw new Error('integration build failed; see integration/build.log');
+        await vm.scpFrom('/var/b2402/integration/ostree-bootc-integration-tests', path.join(local, 'ostree-bootc-integration-tests'));
+      });
+    }
     default:
       console.log(USAGE);
       process.exitCode = cmd || opts.help ? 0 : 2;
