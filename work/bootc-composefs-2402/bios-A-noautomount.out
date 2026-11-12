@@ -1,0 +1,151 @@
+ 04:07:05 up 3 min,  1 user,  load average: 0.13, 0.08, 0.02
+inactive
+unshare-ls-rc=0
+switch-rc=0
+apiVersion: org.containers.bootc/v1
+kind: BootcHost
+metadata:
+  name: host
+spec:
+  image:
+    image: /var/tmp/up.ociarchive
+    transport: oci-archive
+  bootOrder: default
+status:
+  staged:
+    image:
+      image:
+        image: /var/tmp/up.ociarchive
+        transport: oci-archive
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.677940157Z
+      imageDigest: sha256:3d5b585baf54c5e6e3357c6d746016c695ac87a13a7c1e5e6a3a943894a2a6e2
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: true
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: e3a83825e01e8885290831ce941bd9642d28801a93a2b669d382d8870386cbd3d55ab610578cfeac378df7482d5d243fe49ef80f551da539203f986413c2060b
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  booted:
+    image:
+      image:
+        image: localhost/bz:bios-base
+        transport: registry
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.230112017Z
+      imageDigest: sha256:d160046d1b1b5988ca76b5dc4bc5f1690be3212e599c6bc5bbf67ddf7e8f983b
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: false
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: fb1463420c2e44ed016c3a46964c37be35a4e611928a0453b1d4e4a259d17b78b82b5ee328457b0f831d13ba845090c55a7bc821f17bfd73b17ab868874cb1ca
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  rollback: null
+  rollbackQueued: false
+  type: null
+  usrOverlay: null
+  readOnly: false
+ 04:10:21 up 6 min,  1 user,  load average: 0.04, 0.08, 0.03
+active
+active
+hold-pid=2151
+lr-x------. 1 root root 64 Nov  5 04:10 11 -> /boot
+upgrade-bios-up
+marker-match-rc=0
+apiVersion: org.containers.bootc/v1
+kind: BootcHost
+metadata:
+  name: host
+spec:
+  image:
+    image: /var/tmp/up.ociarchive
+    transport: oci-archive
+  bootOrder: default
+status:
+  staged: null
+  booted:
+    image:
+      image:
+        image: /var/tmp/up.ociarchive
+        transport: oci-archive
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.677940157Z
+      imageDigest: sha256:3d5b585baf54c5e6e3357c6d746016c695ac87a13a7c1e5e6a3a943894a2a6e2
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: false
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: e3a83825e01e8885290831ce941bd9642d28801a93a2b669d382d8870386cbd3d55ab610578cfeac378df7482d5d243fe49ef80f551da539203f986413c2060b
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  rollback:
+    image:
+      image:
+        image: localhost/bz:bios-base
+        transport: registry
+      version: 202611050327.ge2745d1931
+      timestamp: 2026-11-05T03:44:31.230112017Z
+      imageDigest: sha256:d160046d1b1b5988ca76b5dc4bc5f1690be3212e599c6bc5bbf67ddf7e8f983b
+      architecture: amd64
+    cachedUpdate: null
+    incompatible: false
+    pinned: false
+    softRebootCapable: true
+    downloadOnly: false
+    store: null
+    ostree: null
+    composefs:
+      verity: fb1463420c2e44ed016c3a46964c37be35a4e611928a0453b1d4e4a259d17b78b82b5ee328457b0f831d13ba845090c55a7bc821f17bfd73b17ab868874cb1ca
+      bootType: Bls
+      bootloader: grub
+      bootDigest: f0567fd7f5f666fc5632af9fbe1d02eb445f3171884f91b40d9cfd9820dfd411
+      missingVerityAllowed: false
+  rollbackQueued: false
+  type: null
+  usrOverlay: null
+  readOnly: false
+Nov 05 04:03:32.945204 fedora systemd[1]: Starting bootc-root-setup.service - bootc setup root...
+Nov 05 04:03:32.986208 fedora systemd[1]: Finished bootc-root-setup.service - bootc setup root.
+Nov 05 04:03:35.086644 fedora systemd[1]: Starting bootc-sysusers-shadow-sync.service - Sync /etc/shadow and /etc/gshadow before systemd-sysusers...
+Nov 05 04:03:35.119987 fedora systemd[1]: Finished bootc-sysusers-shadow-sync.service - Sync /etc/shadow and /etc/gshadow before systemd-sysusers.
+Nov 05 04:03:37.494447 fedora systemd[1]: bootc-fetch-apply-updates.timer - Apply bootc updates skipped, unmet condition check ConditionPathExists=/run/ostree-booted
+Nov 05 04:03:37.528733 fedora systemd[1]: Started bootc-generic-growpart.service - Bootc Fallback Root Filesystem Grow.
+Nov 05 04:03:37.545276 fedora bootc-generic-growpart[1762]: Backing device: /dev/vda3
+Nov 05 04:03:37.590508 fedora systemd[1]: Starting bootloader-update.service - Update bootloader on boot...
+Nov 05 04:03:37.651328 fedora bootc-generic-growpart[1819]: NOCHANGE: partition 3 could only be grown by 2015 [fudge=2048]
+Nov 05 04:03:37.680207 fedora systemd[1]: bootc-generic-growpart.service: Deactivated successfully.
+Nov 05 04:03:37.739996 fedora bootupctl[1846]: No components installed.
+Nov 05 04:03:37.758086 fedora systemd[1]: Finished bootloader-update.service - Update bootloader on boot.
+Nov 05 04:07:07.326536 fedora systemd[1]: Starting bootc-finalize-staged-hold.service - Hold /boot Open for Composefs Finalize Staged Deployment...
+Nov 05 04:07:07.341518 fedora systemd[1]: Started bootc-finalize-staged-hold.service - Hold /boot Open for Composefs Finalize Staged Deployment.
+Nov 05 04:07:07.342534 fedora systemd[1]: Finished bootc-finalize-staged.service - Composefs Finalize Staged Deployment.
+Nov 05 04:10:21.272961 fedora systemd[1]: bootloader-update.service: Deactivated successfully.
+Nov 05 04:10:21.273029 fedora systemd[1]: Stopped bootloader-update.service - Update bootloader on boot.
+Nov 05 04:10:21.935273 fedora systemd[1]: Stopping bootc-finalize-staged.service - Composefs Finalize Staged Deployment...
+Nov 05 04:10:22.087351 fedora bootc[2279]: Starting composefs staged deployment finalization
+Nov 05 04:10:22.463674 fedora bootc[2279]: Starting composefs garbage collection
+Nov 05 04:10:22.494955 fedora systemd[1]: bootc-finalize-staged.service: Deactivated successfully.
+Nov 05 04:10:22.495310 fedora systemd[1]: Stopped bootc-finalize-staged.service - Composefs Finalize Staged Deployment.
