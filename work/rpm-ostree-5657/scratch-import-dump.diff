@@ -1,0 +1,85 @@
+diff --git a/src/app/libmain.cxx b/src/app/libmain.cxx
+index 4323a642..6fe27111 100644
+--- a/src/app/libmain.cxx
++++ b/src/app/libmain.cxx
+@@ -33,6 +33,7 @@
+ #include "rpmostree-builtins.h"
+ #include "rpmostree-cxxrs.h"
+ #include "rpmostree-importer.h"
++#include "rpmostree-importer.h"
+ #include "rpmostree-polkit-agent.h"
+ #include "rpmostree-util.h"
+ #include "rpmostreemain.h"
+@@ -579,6 +580,7 @@ c_unit_tests ()
+ {
+   // Add unit tests to a new C/C++ file here.
+   rpmostreed_utils_tests ();
++  rpmostree_importer_dump ();
+   rpmostree_importer_tests ();
+ }
+ 
+diff --git a/src/libpriv/rpmostree-importer.cxx b/src/libpriv/rpmostree-importer.cxx
+index dfd27362..bf43191d 100644
+--- a/src/libpriv/rpmostree-importer.cxx
++++ b/src/libpriv/rpmostree-importer.cxx
+@@ -922,3 +922,47 @@ rpmostree_importer_tests (void)
+   g_assert_no_error (error);
+   g_print ("ok RPM import (contents, modes, xattrs, hardlinks and filtering)\n");
+ }
++
++/* SCRATCH (not for upstream): import each RPM in $RPMOSTREE_DUMP_RPMS
++ * (newline-separated) into the bare-user repo $RPMOSTREE_DUMP_REPO and print
++ * "<file> <contents-checksum> <metadata-checksum>" or "<file> ERROR <msg>". */
++void
++rpmostree_importer_dump (void)
++{
++  const char *list = g_getenv ("RPMOSTREE_DUMP_RPMS");
++  const char *repopath_s = g_getenv ("RPMOSTREE_DUMP_REPO");
++  if (!list || !repopath_s)
++    return;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GFile) repopath = g_file_new_for_path (repopath_s);
++  g_autoptr (OstreeRepo) repo = ostree_repo_new (repopath);
++  if (!g_file_query_exists (repopath, NULL))
++    g_assert_true (ostree_repo_create (repo, OSTREE_REPO_MODE_BARE_USER, NULL, &error));
++  else
++    g_assert_true (ostree_repo_open (repo, NULL, &error));
++  g_assert_no_error (error);
++  g_auto (GStrv) paths = g_strsplit (list, "\n", -1);
++  for (char **it = paths; *it; it++)
++    {
++      if (!**it)
++        continue;
++      g_autoptr (GError) local_error = NULL;
++      g_assert_true (ostree_repo_prepare_transaction (repo, NULL, NULL, &error));
++      glnx_autofd int fd = open (*it, O_RDONLY | O_CLOEXEC);
++      g_assert_cmpint (fd, >=, 0);
++      auto flags = rpmostreecxx::rpm_importer_flags_new_empty ();
++      g_autoptr (RpmOstreeImporter) importer
++          = rpmostree_importer_new_take_fd (&fd, repo, NULL, *flags, NULL, NULL, &local_error);
++      g_autofree char *commit = NULL;
++      g_autoptr (GFile) root = NULL;
++      if (importer && rpmostree_importer_run (importer, &commit, NULL, NULL, &local_error)
++          && ostree_repo_read_commit (repo, commit, &root, NULL, NULL, &local_error))
++        g_print ("%s %s %s\n", *it,
++                 ostree_repo_file_tree_get_contents_checksum (OSTREE_REPO_FILE (root)),
++                 ostree_repo_file_tree_get_metadata_checksum (OSTREE_REPO_FILE (root)));
++      else
++        g_print ("%s ERROR %s\n", *it, local_error->message);
++      g_assert_true (ostree_repo_commit_transaction (repo, NULL, NULL, &error));
++      g_assert_no_error (error);
++    }
++}
+diff --git a/src/libpriv/rpmostree-importer.h b/src/libpriv/rpmostree-importer.h
+index 0aab0839..3ff7045a 100644
+--- a/src/libpriv/rpmostree-importer.h
++++ b/src/libpriv/rpmostree-importer.h
+@@ -60,6 +60,8 @@ char *rpmostree_importer_run_async_finish (RpmOstreeImporter *self, GAsyncResult
+ 
+ char *rpmostree_importer_get_nevra (RpmOstreeImporter *self);
+ 
++void rpmostree_importer_dump (void);
++
+ void rpmostree_importer_tests (void);
+ 
+ G_END_DECLS

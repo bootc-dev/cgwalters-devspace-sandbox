@@ -1,0 +1,36 @@
+From 7a4e910bc422323a615b91655dce742b55b2edc7 Mon Sep 17 00:00:00 2001
+From: cgwalters-bot <17814078+cgwalters-bot@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 20:24:41 +0000
+Subject: [PATCH 4/4] importer: Bump unpack minor version for the librpm reader
+
+Cached imports change for setid files owned by a non-root account:
+they are now stored as root without the setid bit, rather than with
+the build host's numeric ids. Record this so such caches can be told
+apart; nothing checks the version yet.
+
+Generated-by: https://github.com/cgwalters/#llms
+---
+ src/libpriv/rpmostree-importer.cxx | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/libpriv/rpmostree-importer.cxx b/src/libpriv/rpmostree-importer.cxx
+index ed76ab3c..8fc5f085 100644
+--- a/src/libpriv/rpmostree-importer.cxx
++++ b/src/libpriv/rpmostree-importer.cxx
+@@ -409,10 +409,11 @@ build_metadata_variant (RpmOstreeImporter *self, GVariant **out_variant, char **
+                          g_variant_new_uint32 (1));
+ 
+   /* Originally we just had unpack_version = 1, let's add a minor version for
+-   * compatible increments.  Bumped 4 → 5 for timestamp, and 5 → 6 for docs.
++   * compatible increments.  Bumped 4 → 5 for timestamp, 5 → 6 for docs, and
++   * 6 → 7 for decoding payloads with librpm.
+    */
+   g_variant_builder_add (&metadata_builder, "{sv}", "rpmostree.unpack_minor_version",
+-                         g_variant_new_uint32 (6));
++                         g_variant_new_uint32 (7));
+ 
+   if (self->pkg)
+     {
+-- 
+2.52.0
+

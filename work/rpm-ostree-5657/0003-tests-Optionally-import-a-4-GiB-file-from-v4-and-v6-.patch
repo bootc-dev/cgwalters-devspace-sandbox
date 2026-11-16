@@ -1,0 +1,103 @@
+From bb641b5b698e97691cff3efbbaf09d4ff6da61f1 Mon Sep 17 00:00:00 2001
+From: cgwalters-bot <17814078+cgwalters-bot@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 20:24:31 +0000
+Subject: [PATCH 3/4] tests: Optionally import a 4 GiB file from v4 and v6
+ packages
+
+Files of 4 GiB or more need rpm's stripped cpio payload even in v4
+packages, so libarchive couldn't import those either. With
+RPMOSTREE_TEST_LARGE_FILES=1, build such a package in both formats and
+check the file's size and that both import to the same tree. It is
+opt-in because building and importing takes about a minute and over
+8 GiB of temporary storage.
+
+Generated-by: https://github.com/cgwalters/#llms
+---
+ src/libpriv/rpmostree-importer.cxx | 42 ++++++++++++++++++++++++++++++
+ tests/check/test-importer.sh       | 12 +++++++++
+ 2 files changed, 54 insertions(+)
+
+diff --git a/src/libpriv/rpmostree-importer.cxx b/src/libpriv/rpmostree-importer.cxx
+index 682445ba..ed76ab3c 100644
+--- a/src/libpriv/rpmostree-importer.cxx
++++ b/src/libpriv/rpmostree-importer.cxx
+@@ -746,6 +746,47 @@ rpmostree_importer_get_nevra (RpmOstreeImporter *self)
+                                | PKG_NEVRA_FLAGS_ARCH));
+ }
+ 
++/* Files of 4 GiB or more need the stripped payload even in v4 packages. These
++ * are only built on request, as they take over 8 GiB to build and import. */
++static void
++test_import_large_files (OstreeRepo *repo)
++{
++  const char *packages[]
++      = { g_getenv ("RPMOSTREE_TEST_LARGE_RPM_V4"), g_getenv ("RPMOSTREE_TEST_LARGE_RPM_V6") };
++  g_autofree char *first_contents = NULL;
++  for (const char *package : packages)
++    {
++      if (!package)
++        continue;
++      g_autoptr (GError) error = NULL;
++      glnx_autofd int fd = open (package, O_RDONLY | O_CLOEXEC);
++      g_assert_cmpint (fd, >=, 0);
++      auto flags = rpmostreecxx::rpm_importer_flags_new_empty ();
++      g_autoptr (RpmOstreeImporter) importer
++          = rpmostree_importer_new_take_fd (&fd, repo, NULL, *flags, NULL, NULL, &error);
++      g_assert_no_error (error);
++      g_autofree char *commit = NULL;
++      gboolean imported = rpmostree_importer_run (importer, &commit, NULL, NULL, &error);
++      g_assert_no_error (error);
++      g_assert_true (imported);
++      g_autoptr (GFile) root = NULL;
++      g_assert_true (ostree_repo_read_commit (repo, commit, &root, NULL, NULL, &error));
++      g_assert_no_error (error);
++      g_autoptr (GFile) large
++          = g_file_resolve_relative_path (root, "usr/share/payload-large/large");
++      g_autoptr (GFileInfo) info = g_file_query_info (large, G_FILE_ATTRIBUTE_STANDARD_SIZE,
++                                                      G_FILE_QUERY_INFO_NONE, NULL, &error);
++      g_assert_no_error (error);
++      g_assert_cmpuint (g_file_info_get_size (info), ==, (G_GUINT64_CONSTANT (1) << 32) + 5);
++      const char *contents = ostree_repo_file_tree_get_contents_checksum (OSTREE_REPO_FILE (root));
++      if (first_contents)
++        g_assert_cmpstr (contents, ==, first_contents);
++      else
++        first_contents = g_strdup (contents);
++      g_print ("ok imported a 4 GiB file from %s\n", package);
++    }
++}
++
+ /* The shell test builds these from one spec through the compose test helper.
+  * Compare tree checksums, not commits: the latter contain the differing RPM
+  * headers. Tree checksums cover contents, names, modes, ownership and xattrs. */
+@@ -923,6 +964,7 @@ rpmostree_importer_tests (void)
+     }
+   for (auto thread : threads)
+     g_thread_join (thread);
++  test_import_large_files (repo);
+   g_assert_true (ostree_repo_abort_transaction (repo, NULL, &error));
+   g_assert_no_error (error);
+   g_print ("ok RPM import (contents, modes, xattrs, hardlinks and filtering)\n");
+diff --git a/tests/check/test-importer.sh b/tests/check/test-importer.sh
+index 9b7ebf15..ae3888fa 100644
+--- a/tests/check/test-importer.sh
++++ b/tests/check/test-importer.sh
+@@ -55,4 +55,16 @@ export RPMOSTREE_TEST_RPM_V4="$PWD/payload-v4.rpm"
+ if test "${#formats[@]}" = 2; then
+     export RPMOSTREE_TEST_RPM_V6="$PWD/payload-v6.rpm"
+ fi
++if test -n "${RPMOSTREE_TEST_LARGE_FILES:-}"; then
++    for format in "${formats[@]}"; do
++        build_rpm payload-large arch "$arch" repository no rpmformat "$format" install '
++mkdir -p %{buildroot}/usr/share/payload-large
++{ head -c 4294967296 /dev/zero; echo tail; } > %{buildroot}/usr/share/payload-large/large
++' files /usr/share/payload-large
++        mv "yumrepo/packages/${arch}/payload-large-1.0-1.${arch}.rpm" "payload-large-v${format}.rpm"
++        export "RPMOSTREE_TEST_LARGE_RPM_V${format}=$PWD/payload-large-v${format}.rpm"
++    done
++else
++    echo 'ok # SKIP 4 GiB files (set RPMOSTREE_TEST_LARGE_FILES=1)'
++fi
+ LC_ALL=C rpm-ostree testutils c-units
+-- 
+2.52.0
+

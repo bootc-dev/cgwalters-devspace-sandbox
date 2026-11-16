@@ -1,0 +1,61 @@
+From 37837b29b4edf7ea8117ac6fd32c06b6282e1ca7 Mon Sep 17 00:00:00 2001
+From: cgwalters-bot <17814078+cgwalters-bot@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 20:22:51 +0000
+Subject: [PATCH 2/4] tests: Build the importer test packages natively
+
+build_rpm defaults to setarch x86_64, which fails elsewhere, so build
+for the host architecture. Skip the test when rpmbuild is missing, and
+drop an %attr on a symlink that rpmbuild warned it ignores.
+
+Generated-by: https://github.com/cgwalters/#llms
+---
+ tests/check/test-importer.sh | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/tests/check/test-importer.sh b/tests/check/test-importer.sh
+index 41a5c9bc..9b7ebf15 100644
+--- a/tests/check/test-importer.sh
++++ b/tests/check/test-importer.sh
+@@ -1,6 +1,12 @@
+ # Paired payload coverage, using the same package builder as the compose tests.
+ set -euo pipefail
+ . "${commondir}/libtest.sh"
++if ! command -v rpmbuild >/dev/null; then
++    echo 'ok # SKIP rpmbuild is not installed'
++    exit 0
++fi
++# Build natively: build_rpm otherwise defaults to setarch x86_64.
++arch=$(uname -m)
+ formats=(4)
+ if test -n "$(rpm --eval '%{?_rpmformat}')"; then
+     formats+=(6)
+@@ -8,7 +14,7 @@ else
+     echo 'ok # SKIP rpmbuild cannot build v6 packages (requires RPM 6)'
+ fi
+ for format in "${formats[@]}"; do
+-    build_rpm payload-test repository no rpmformat "$format" install '
++    build_rpm payload-test arch "$arch" repository no rpmformat "$format" install '
+ mkdir -p %{buildroot}/usr/share/payload-test/shared %{buildroot}/etc
+ printf "hardlinked payload\n" > %{buildroot}/usr/share/payload-test/a
+ ln %{buildroot}/usr/share/payload-test/a %{buildroot}/usr/share/payload-test/b
+@@ -30,7 +36,7 @@ echo configuration > %{buildroot}/etc/payload-test
+ %doc %attr(0640,root,root) /usr/share/payload-test/c
+ %attr(0640,root,root) /usr/share/payload-test/café
+ %attr(0640,root,root) /usr/share/payload-test/empty*
+-%attr(0640,root,root) /usr/share/payload-test/link
++/usr/share/payload-test/link
+ /usr/share/payload-test/socket
+ %attr(0640,root,root) /usr/share/payload-test/large
+ %attr(4750,payload-user-one,payload-group-one) /usr/share/payload-test/owner-one
+@@ -40,7 +46,7 @@ echo configuration > %{buildroot}/etc/payload-test
+ %ghost /usr/share/payload-test/ghost
+ %caps(cap_net_bind_service=ep) /usr/bin/payload-test
+ '
+-    mv yumrepo/packages/x86_64/payload-test-1.0-1.x86_64.rpm "payload-v${format}.rpm"
++    mv "yumrepo/packages/${arch}/payload-test-1.0-1.${arch}.rpm" "payload-v${format}.rpm"
+     if test "${#formats[@]}" = 2; then
+         assert_streq "$(rpm -qp --qf '%{RPMFORMAT}' "payload-v${format}.rpm")" "$format"
+     fi
+-- 
+2.52.0
+
