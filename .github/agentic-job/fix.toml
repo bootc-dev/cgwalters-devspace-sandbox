@@ -1,0 +1,25 @@
+# Bounds for agent.yml's `fix` kind: devspace CI for midstream fork pull
+# requests (cgwalters-forge/tracker#1725). The fork's own Actions are off,
+# so a devspace run checks out the fork PR, runs the project's CI steps on
+# this VM, and pushes the fixes straight to the PR's branch.
+#
+# Which forks: any cgwalters-forge fork with the bot-midstream topic, read
+# from live repository metadata at policy time (no list to keep in sync;
+# a metadata failure refuses). Which branches: only the bot's own staging
+# and dispatch branches, never a fork's main. No `ready_when_complete`, so
+# apply never takes a midstream draft out of draft; the operator promotes.
+hosts = ["github.com"]
+repos = [{ org = "cgwalters-forge", forks = true, topics = ["bot-midstream"] }]
+bases = ["main"]
+max_outputs = 3
+max_patch_bytes = 1048576
+max_patch_files = 50
+
+[github.outputs]
+push_to_pull_request_branch = { max = 1, branches = ["dispatch/**", "bot/**"], replacement_max_commits = 5, own_author = "cgwalters-bot" }
+add_comment = { max = 1 }
+noop = { max = 1 }
+missing_tool = { max = 1 }
+missing_data = { max = 1 }
+
+# No [unprotected_files]: a run may not edit a fork's `.github/`.
