@@ -1,0 +1,81 @@
+From 89d45c503de6ef3a6bce51c32fe119c454d920a7 Mon Sep 17 00:00:00 2001
+From: cgwalters-bot <17814078+cgwalters-bot@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 19:47:06 +0000
+Subject: [PATCH 1/2] importer: Skip sockets in the payload adapter
+
+The tar adapter can't represent sockets, so importing any package that
+ships one failed with "pax format cannot archive sockets". Reading the
+cpio payload directly, the importer skipped them as unsupported content,
+as it still does FIFOs and device nodes, so skip them in the adapter.
+
+Add a FIFO, a socket and a device node to the paired v4/v6 test package
+and check that none of them is imported.
+
+Generated-by: https://github.com/cgwalters/#llms
+---
+ src/libpriv/rpmostree-importer.cxx      | 9 +++++++--
+ src/libpriv/rpmostree-unpacker-core.cxx | 4 ++++
+ tests/check/test-importer.sh            | 5 +++++
+ 3 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/src/libpriv/rpmostree-importer.cxx b/src/libpriv/rpmostree-importer.cxx
+index dfd27362..1d35460d 100644
+--- a/src/libpriv/rpmostree-importer.cxx
++++ b/src/libpriv/rpmostree-importer.cxx
+@@ -879,8 +879,13 @@ rpmostree_importer_tests (void)
+             }
+         }
+       g_assert_true (found_capability);
+-      g_autoptr (GFile) ghost = g_file_resolve_relative_path (root, "usr/share/payload-test/ghost");
+-      g_assert_false (g_file_query_exists (ghost, NULL));
++      /* Ghosts aren't in the payload; special files are unsupported content. */
++      for (const char *absent : { "ghost", "fifo", "socket", "null" })
++        {
++          g_autofree char *path = g_strconcat ("usr/share/payload-test/", absent, NULL);
++          g_autoptr (GFile) file = g_file_resolve_relative_path (root, path);
++          g_assert_false (g_file_query_exists (file, NULL));
++        }
+       g_autoptr (GFile) config = g_file_resolve_relative_path (root, "usr/etc/payload-test");
+       g_assert_true (g_file_query_exists (config, NULL));
+     }
+diff --git a/src/libpriv/rpmostree-unpacker-core.cxx b/src/libpriv/rpmostree-unpacker-core.cxx
+index 0177a950..528c5e2d 100644
+--- a/src/libpriv/rpmostree-unpacker-core.cxx
++++ b/src/libpriv/rpmostree-unpacker-core.cxx
+@@ -125,6 +125,10 @@ rpmostree_unpack_rpm_payload (int fd, Header hdr, off_t payload_offset, int outp
+     {
+       if (g_cancellable_set_error_if_cancelled (cancellable, error))
+         return FALSE;
++      /* Tar can't represent sockets, and the importer would skip them anyway
++       * as unsupported content, as it did reading the cpio payload directly. */
++      if (S_ISSOCK (rpmfiFMode (fi)))
++        continue;
+       archive_entry_clear (entry);
+       g_autofree char *name = g_strconcat (".", rpmfiFN (fi), NULL);
+       archive_entry_set_pathname (entry, name);
+diff --git a/tests/check/test-importer.sh b/tests/check/test-importer.sh
+index c102c8e8..f8a4c897 100644
+--- a/tests/check/test-importer.sh
++++ b/tests/check/test-importer.sh
+@@ -19,6 +19,8 @@ printf "second owner\n" > %{buildroot}/usr/share/payload-test/owner-two
+ touch %{buildroot}/usr/share/payload-test/empty
+ ln %{buildroot}/usr/share/payload-test/empty %{buildroot}/usr/share/payload-test/empty-link
+ ln -s a %{buildroot}/usr/share/payload-test/link
++mkfifo %{buildroot}/usr/share/payload-test/fifo
++python3 -c "import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" %{buildroot}/usr/share/payload-test/socket
+ dd if=/dev/zero of=%{buildroot}/usr/share/payload-test/large bs=1M count=2
+ echo configuration > %{buildroot}/etc/payload-test
+ ' files '
+@@ -29,6 +31,9 @@ echo configuration > %{buildroot}/etc/payload-test
+ %attr(0640,root,root) /usr/share/payload-test/café
+ %attr(0640,root,root) /usr/share/payload-test/empty*
+ %attr(0640,root,root) /usr/share/payload-test/link
++%attr(0640,root,root) /usr/share/payload-test/fifo
++%attr(0640,root,root) /usr/share/payload-test/socket
++%dev(c,1,3) /usr/share/payload-test/null
+ %attr(0640,root,root) /usr/share/payload-test/large
+ %attr(4750,payload-user-one,payload-group-one) /usr/share/payload-test/owner-one
+ %attr(2750,payload-user-two,payload-group-two) /usr/share/payload-test/owner-two
+-- 
+2.52.0
+
