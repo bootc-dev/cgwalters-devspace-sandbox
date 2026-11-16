@@ -25,13 +25,13 @@ on:
         default: bootc-dev/bootc
         required: true
       item:
-        description: Positive issue number in the target repository
+        description: Positive issue number in the target repository (a pull request number for fix)
         type: string
         required: true
       kind:
         description: Fixed profile
         type: choice
-        options: [research, triage, implement]
+        options: [research, triage, implement, fix]
         default: research
         required: true
       pool:
