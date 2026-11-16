@@ -1,0 +1,64 @@
+diff --git a/src/app/libmain.cxx b/src/app/libmain.cxx
+index 1c1535fe..8bcf6a41 100644
+--- a/src/app/libmain.cxx
++++ b/src/app/libmain.cxx
+@@ -32,6 +32,7 @@
+ 
+ #include "rpmostree-builtins.h"
+ #include "rpmostree-cxxrs.h"
++#include "rpmostree-importer.h"
+ #include "rpmostree-polkit-agent.h"
+ #include "rpmostree-util.h"
+ #include "rpmostreemain.h"
+@@ -572,10 +573,51 @@ rpmostree_process_global_teardown ()
+   rpmostree_polkit_agent_close ();
+ }
+ 
++// Harness only (rpm-ostree-5657): import each RPM listed one per line in
++// $RPMOSTREE_IMPORT_DUMP into the bare-user repo $RPMOSTREE_IMPORT_DUMP_REPO,
++// printing "path<TAB>commit" or "path<TAB>ERROR: message".
++static bool
++import_dump ()
++{
++  const char *list = g_getenv ("RPMOSTREE_IMPORT_DUMP");
++  if (!list)
++    return false;
++  g_autoptr (GError) error = NULL;
++  g_autofree char *contents = NULL;
++  g_assert_true (g_file_get_contents (list, &contents, NULL, &error));
++  g_autoptr (GFile) repopath = g_file_new_for_path (g_getenv ("RPMOSTREE_IMPORT_DUMP_REPO"));
++  g_autoptr (OstreeRepo) repo = ostree_repo_new (repopath);
++  g_assert_true (ostree_repo_create (repo, OSTREE_REPO_MODE_BARE_USER, NULL, &error));
++  g_assert_true (ostree_repo_prepare_transaction (repo, NULL, NULL, &error));
++  g_auto (GStrv) paths = g_strsplit (contents, "\n", -1);
++  for (char **path = paths; *path; path++)
++    {
++      if (!**path)
++        continue;
++      glnx_autofd int fd = open (*path, O_RDONLY | O_CLOEXEC);
++      g_assert_cmpint (fd, >=, 0);
++      auto flags = rpmostreecxx::rpm_importer_flags_new_empty ();
++      g_autoptr (GError) local_error = NULL;
++      g_autofree char *commit = NULL;
++      g_autoptr (RpmOstreeImporter) importer
++          = rpmostree_importer_new_take_fd (&fd, repo, NULL, *flags, NULL, NULL, &local_error);
++      if (importer)
++        rpmostree_importer_run (importer, &commit, NULL, NULL, &local_error);
++      if (local_error)
++        g_print ("%s\tERROR: %s\n", *path, local_error->message);
++      else
++        g_print ("%s\t%s\n", *path, commit);
++    }
++  g_assert_true (ostree_repo_commit_transaction (repo, NULL, NULL, &error));
++  return true;
++}
++
+ // Execute all the C/C++ unit tests.
+ void
+ c_unit_tests ()
+ {
++  if (import_dump ())
++    return;
+   // Add unit tests to a new C/C++ file here.
+   rpmostreed_utils_tests ();
+ }

@@ -1,0 +1,39 @@
+From 2b9c436e79155af73d0af60c3bcfd10660672e65 Mon Sep 17 00:00:00 2001
+From: cgwalters-bot <17814078+cgwalters-bot@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 19:47:12 +0000
+Subject: [PATCH 2/2] tests: Build the payload test package as noarch
+
+build_rpm defaults to x86_64 and runs rpmbuild under setarch, so the
+importer test in make check could only pass on x86_64. Nothing in the
+package depends on the architecture.
+
+Generated-by: https://github.com/cgwalters/#llms
+---
+ tests/check/test-importer.sh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tests/check/test-importer.sh b/tests/check/test-importer.sh
+index f8a4c897..3e3d4d53 100644
+--- a/tests/check/test-importer.sh
++++ b/tests/check/test-importer.sh
+@@ -8,7 +8,7 @@ else
+     echo 'ok # SKIP rpmbuild cannot build v6 packages (requires RPM 6)'
+ fi
+ for format in "${formats[@]}"; do
+-    build_rpm payload-test repository no rpmformat "$format" install '
++    build_rpm payload-test arch noarch repository no rpmformat "$format" install '
+ mkdir -p %{buildroot}/usr/share/payload-test/shared %{buildroot}/etc
+ printf "hardlinked payload\n" > %{buildroot}/usr/share/payload-test/a
+ ln %{buildroot}/usr/share/payload-test/a %{buildroot}/usr/share/payload-test/b
+@@ -42,7 +42,7 @@ echo configuration > %{buildroot}/etc/payload-test
+ %ghost /usr/share/payload-test/ghost
+ %caps(cap_net_bind_service=ep) /usr/bin/payload-test
+ '
+-    mv yumrepo/packages/x86_64/payload-test-1.0-1.x86_64.rpm "payload-v${format}.rpm"
++    mv yumrepo/packages/noarch/payload-test-1.0-1.noarch.rpm "payload-v${format}.rpm"
+     if test "${#formats[@]}" = 2; then
+         assert_streq "$(rpm -qp --qf '%{RPMFORMAT}' "payload-v${format}.rpm")" "$format"
+     fi
+-- 
+2.52.0
+
