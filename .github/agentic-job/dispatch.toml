@@ -2,7 +2,9 @@
 # Exact names, no globs; add a repository here before dispatching to it.
 # No fix.toml: agent.yml offers no `fix` kind, the only one that reads it.
 hosts = ["github.com"]
-repos = ["bootc-dev/bootc", "bootc-dev/cgwalters-devspace-sandbox"]
+# cgwalters-forge/atomic-linux-sandbox by the operator's decision of 2026-11-22: develop the
+# Utah-based variant (its #92) on these runners.
+repos = ["bootc-dev/bootc", "bootc-dev/cgwalters-devspace-sandbox", "cgwalters-forge/atomic-linux-sandbox"]
 bases = ["main"]
 max_outputs = 3
 max_patch_bytes = 1048576
